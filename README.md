@@ -37,7 +37,7 @@ The debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
 - Original login, local catalog, home, preview and player infrastructure.
 - Live TV categories, folded world categories, channel grid and numeric selection.
 - Favorite and hide/restore actions, source selection, and category-scoped zapping.
-- Navigation rail expands over content; bundled typography and responsive home hero.
+- Netflix-style top navigation bar over the hero; bundled typography and responsive home hero.
 - Credentials are restricted to the configured API/XMLTV origin and paths.
 
 Movies and series now include searchable libraries, genre filtering, details, resume/start-over, favorites, seasons and episode selection. The guide includes channel/day selection, program details and archive eligibility. Search, My List and Settings are connected to the local catalog.

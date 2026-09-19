@@ -10,8 +10,9 @@ import androidx.activity.compose.BackHandler
 import androidx.tv.material3.Surface
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.tv.foundation.lazy.list.TvLazyRow
-import androidx.tv.foundation.lazy.list.items as rowItems
+import androidx.compose.foundation.lazy.items as rowItems
+import androidx.compose.foundation.lazy.itemsIndexed as rowItemsIndexed
+import tv.nakash.ui.components.NetflixRow
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.ui.draw.clipToBounds
@@ -87,10 +88,14 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
             }
         }
     }
-    val shelves by produceState(emptyList<Shelf>(), titles, categories,continued) {
+    val favorites by vm.favorites.collectAsState()
+    val shelves by produceState(emptyList<Shelf>(), titles, categories,continued,favorites) {
         value = withContext(Dispatchers.Default) {
             buildList {
                 if(continued.isNotEmpty()) add(Shelf("continue","המשך צפייה",continued.take(12)))
+                val indexed=titles.associateBy {it.id}
+                val mine=favorites.filter {it.kind==(if(seriesMode) "series" else "movie")}.sortedByDescending {it.addedAt}.mapNotNull {indexed[it.refId.toIntOrNull()]}
+                if(mine.isNotEmpty()) add(Shelf("mylist","הרשימה שלי",mine.take(12)))
                 if(titles.isNotEmpty()) add(Shelf("new",if(seriesMode) "פרקים חדשים" else "חדש בשירות",titles.take(12)))
                 val rated=titles.filter { (it.rating ?: 0.0)>=7.0 }.sortedByDescending { it.rating }.take(12)
                 if(rated.isNotEmpty()) add(Shelf("rated","שווה לראות",rated))
@@ -105,10 +110,11 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     LaunchedEffect(focusedShelfIndex,selectedCategory) {
         if(selectedCategory==null && focusedShelfIndex>=0) shelfScroll.animateScrollToItem(focusedShelfIndex)
     }
-    val filtered by produceState(emptyList<ShelfTitle>(), selectedCategory,titles,continued) {
+    val filtered by produceState(emptyList<ShelfTitle>(), selectedCategory,titles,continued,favorites) {
         value=withContext(Dispatchers.Default) {
             when(selectedCategory) {
                 "continue" -> continued
+                "mylist" -> favorites.filter {it.kind==(if(seriesMode) "series" else "movie")}.sortedByDescending {it.addedAt}.mapNotNull {f->titles.firstOrNull {it.id==f.refId.toIntOrNull()}}
                 "new" -> titles
                 "rated" -> titles.filter {(it.rating ?: 0.0)>=7.0}.sortedByDescending {it.rating}
                 else -> titles.filter {selectedCategory?.removePrefix("cat") in it.categories.split(',')}
@@ -125,12 +131,22 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val heroHeight=maxHeight*.49f
         val shelfBottomPadding=(maxHeight-heroHeight-100.dp).coerceAtLeast(24.dp)
+        if(selectedCategory!=null) {
+            // Netflix-style category gallery: a full-screen poster grid under the nav bar, no hero.
+            Column(Modifier.fillMaxSize().padding(top=tv.nakash.ui.nav.NavBarHeight)) {
+                tv.nakash.ui.components.CategoryHeading(shelves.firstOrNull {it.key==selectedCategory}?.title ?: "כל התכנים",::closeCategory,"${filtered.size} כותרים")
+                LazyVerticalGrid(GridCells.Adaptive(142.dp),Modifier.weight(1f).focusGroup(),contentPadding=PaddingValues(start=32.dp,end=32.dp,top=10.dp,bottom=32.dp),horizontalArrangement=Arrangement.spacedBy(14.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
+                    itemsIndexed(filtered,key={_,it->it.id}) { i,item -> Box(if(i==0) Modifier.focusRequester(initialFocus).focusGroup() else Modifier) { PosterCard(item.title,item.year,item.image,item.progress,{focused=item},{open(item)},item.resumeLabel ?: item.title,expandable=false) } }
+                }
+            }
+            return@BoxWithConstraints
+        }
         Box(Modifier.fillMaxWidth().height(heroHeight)) {
             hero?.let { h ->
                 AsyncImage(h.backdrop ?: h.image,null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop,alpha=if(h.backdrop==null) .42f else .85f)
                 Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color.Transparent,NakashColors.Bg.copy(.4f),NakashColors.Bg))))
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent,NakashColors.Bg))))
-                Column(Modifier.padding(horizontal=28.dp,vertical=50.dp).fillMaxWidth(.56f),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.align(Alignment.BottomStart).padding(start=28.dp,end=28.dp,bottom=26.dp).fillMaxWidth(.56f),verticalArrangement=Arrangement.spacedBy(6.dp)) {
                     Text(if(seriesMode) "סדרות · בשביל הערב שלך" else "סרטים · משהו טוב לראות",color=NakashColors.Accent,style=MaterialTheme.typography.labelLarge.copy(fontSize=12.sp))
                     Text(h.title,style=MaterialTheme.typography.displayLarge.copy(fontSize=32.sp,lineHeight=36.sp),maxLines=2,overflow=TextOverflow.Ellipsis)
                     Text(listOfNotNull(h.year?.toString(),h.rating?.takeIf { it>0 }?.let { "★ %.1f".format(it) },h.genres.replace(","," · ").takeIf { it.isNotBlank() }).joinToString("  ·  "),color=NakashColors.Muted,style=MaterialTheme.typography.labelLarge.copy(fontSize=12.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
@@ -139,25 +155,26 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
             }
         }
         Column(Modifier.fillMaxSize().padding(top=heroHeight)) {
-            if(selectedCategory!=null) tv.nakash.ui.components.CategoryHeading(shelves.firstOrNull {it.key==selectedCategory}?.title ?: "כל התכנים",::closeCategory)
             if(titles.isEmpty()) Column(Modifier.padding(32.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
                 Text(if(loading) "מכינים את הספרייה שלך…" else status ?: "הספרייה עדיין לא נטענה",color=NakashColors.Muted)
                 if(!loading) Action("טעינת הספרייה",{vm.refresh(seriesMode)})
             }
-            if(selectedCategory==null) CompositionLocalProvider(LocalBringIntoViewSpec provides manualShelfScroll) {
-            LazyColumn(Modifier.weight(1f).clipToBounds().focusRequester(initialFocus).focusGroup(),state=shelfScroll,contentPadding=PaddingValues(bottom=shelfBottomPadding),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                items(shelves,key={it.key}) { shelf ->
+            CompositionLocalProvider(LocalBringIntoViewSpec provides manualShelfScroll) {
+            LazyColumn(Modifier.weight(1f).clipToBounds().focusGroup(),state=shelfScroll,contentPadding=PaddingValues(bottom=shelfBottomPadding),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                rowItemsIndexed(shelves,key={_,sh->sh.key}) { shelfIndex,shelf ->
                     Column {
                         Text(shelf.title,Modifier.padding(start=32.dp,top=8.dp),style=MaterialTheme.typography.titleLarge.copy(fontSize=16.sp))
                         rowState.SaveableStateProvider(shelf.key) {
-                            TvLazyRow(contentPadding=PaddingValues(horizontal=32.dp,vertical=8.dp),horizontalArrangement=Arrangement.spacedBy(16.dp)) {
-                                rowItems(shelf.items,key={it.id}) { item ->
+                            NetflixRow {
+                                rowItemsIndexed(shelf.items,key={_,it->it.id}) { i,item ->
+                                    Box(if(shelfIndex==0&&i==0) Modifier.focusRequester(initialFocus).focusGroup() else Modifier) {
                                     if(shelf.key=="continue") LibraryContinueCard(item,{focusedShelf=shelf.key;focused=item},{open(item)})
-                                    else PosterCard(item.title,item.year,item.image,null,{focusedShelf=shelf.key;focused=item},{open(item)},item.title)
+                                    else PosterCard(item.title,item.year,item.image,null,{focusedShelf=shelf.key;focused=item},{open(item)},backdrop=item.backdrop)
+                                    }
                                 }
                                 item(key="all") {
-                                    Surface(onClick={selectedCategory=shelf.key},modifier=Modifier.width(if(shelf.key=="continue") 180.dp else 100.dp).height(if(shelf.key=="continue") 112.dp else 150.dp).focusRequester(endFocus.getOrPut(shelf.key) {FocusRequester()}).onFocusChanged {if(it.isFocused) focusedShelf=shelf.key},
-                                        shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),colors=ClickableSurfaceDefaults.colors(containerColor=NakashColors.S2,focusedContainerColor=NakashColors.S3,contentColor=Color.White,focusedContentColor=Color.White)) {
+                                    Surface(onClick={selectedCategory=shelf.key},modifier=Modifier.width(if(shelf.key=="continue") 200.dp else 142.dp).height(if(shelf.key=="continue") 112.dp else 213.dp).focusRequester(endFocus.getOrPut(shelf.key) {FocusRequester()}).onFocusChanged {if(it.isFocused) focusedShelf=shelf.key},
+                                        shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),colors=ClickableSurfaceDefaults.colors(containerColor=NakashColors.S2,focusedContainerColor=NakashColors.S3,contentColor=Color.White,focusedContentColor=Color.White)) {
                                         Column(Modifier.fillMaxSize().padding(12.dp),verticalArrangement=Arrangement.Center,horizontalAlignment=Alignment.CenterHorizontally) {
                                             Text("←",style=MaterialTheme.typography.headlineLarge)
                                             Spacer(Modifier.height(10.dp))
@@ -171,8 +188,6 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                     }
                 }
             }
-            } else LazyVerticalGrid(GridCells.Adaptive(100.dp),Modifier.weight(1f).focusRequester(initialFocus).focusGroup(),contentPadding=PaddingValues(24.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
-                items(filtered,key={it.id}) { item -> PosterCard(item.title,item.year,item.image,item.progress,{focused=item},{open(item)},item.resumeLabel ?: item.title) }
             }
         }
     }
@@ -180,10 +195,10 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
 
 @Composable
 private fun LibraryContinueCard(item:ShelfTitle,focus:()->Unit,open:()->Unit) {
-    Surface(onClick=open,modifier=Modifier.width(180.dp).height(112.dp).onFocusChanged {if(it.isFocused) focus()},
-        shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(7.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1.04f),
+    Surface(onClick=open,modifier=Modifier.width(200.dp).height(112.dp).onFocusChanged {if(it.isFocused) focus()},
+        shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1.04f),
         colors=ClickableSurfaceDefaults.colors(containerColor=NakashColors.S2,focusedContainerColor=NakashColors.S2),
-        border=ClickableSurfaceDefaults.border(focusedBorder=androidx.tv.material3.Border(androidx.compose.foundation.BorderStroke(2.dp,Color.White),shape=RoundedCornerShape(7.dp)))) {
+        border=ClickableSurfaceDefaults.border(focusedBorder=androidx.tv.material3.Border(androidx.compose.foundation.BorderStroke(2.dp,Color.White),shape=RoundedCornerShape(10.dp)))) {
         Box(Modifier.fillMaxSize()) {
             AsyncImage(item.backdrop ?: item.image,null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent,Color.Black.copy(alpha=.94f)))))

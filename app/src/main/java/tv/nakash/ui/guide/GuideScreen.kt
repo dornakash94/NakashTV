@@ -90,26 +90,19 @@ fun GuideScreen(nav:NavHostController,vm:GuideViewModel=hiltViewModel()) {
     fun jump(hour:Int) {scope.launch {val target=date.atTime(hour,0).atZone(zone).toEpochSecond();val i=rows.indexOfFirst {it.end>target};if(i>=0) {list.scrollToItem(i);focusedProgram=rows[i];delay(80);runCatching {programFocus.requestFocus()}}}}
     fun live(c:ChannelEntity) {vm.player.zapChannels.value=visible;vm.player.play(PlayRequest.Live(c));nav.navigate("player")}
     fun archive(c:ChannelEntity,p:EpgEntity,offset:Long) {vm.player.play(PlayRequest.Archive(c,p,offset));dialog=null;nav.navigate("player")}
-    Column(Modifier.fillMaxSize().padding(start=24.dp,end=24.dp,top=20.dp,bottom=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
-            Column {Text("לוח שידורים",style=MaterialTheme.typography.headlineMedium);Text("מה משודר עכשיו. ומה פספסתם.",color=NakashColors.Muted,style=MaterialTheme.typography.bodyMedium)}
-            Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                GuideButton("צפייה חוזרת",archiveOnly,{archiveOnly=!archiveOnly})
-                GuideButton(categories.firstOrNull {it.id==category}?.name ?: "כל הערוצים",category!=null,{filters=true})
-                GuideButton(if(busy) "מעדכנים…" else "עדכון",false,{vm.refresh()})
-            }
-        }
+    Column(Modifier.fillMaxSize().padding(start=32.dp,end=32.dp,top=18.dp,bottom=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
         status?.let {Text(it,color=NakashColors.Muted,style=MaterialTheme.typography.bodySmall)}
         Row(Modifier.weight(1f),horizontalArrangement=Arrangement.spacedBy(20.dp)) {
-            LazyColumn(Modifier.width(172.dp).fillMaxHeight().focusRequester(channelFocus),contentPadding=PaddingValues(4.dp),verticalArrangement=Arrangement.spacedBy(5.dp)) {
+            LazyColumn(Modifier.width(190.dp).fillMaxHeight().focusRequester(channelFocus),contentPadding=PaddingValues(4.dp),verticalArrangement=Arrangement.spacedBy(5.dp)) {
                 items(visible,key={it.id}) {c ->
                     Surface(onClick={selectedId=c.id;scope.launch {delay(100);runCatching {programFocus.requestFocus()}}},
-                        modifier=Modifier.fillMaxWidth().height(54.dp).onFocusChanged {if(it.isFocused) selectedId=c.id},
-                        shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1f),
+                        modifier=Modifier.fillMaxWidth().height(60.dp).onFocusChanged {if(it.isFocused) selectedId=c.id},
+                        shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1f),
                         colors=ClickableSurfaceDefaults.colors(containerColor=if(selected?.id==c.id) NakashColors.S2 else Color.Transparent,focusedContainerColor=NakashColors.S3)) {
-                        Row(Modifier.fillMaxSize().padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                            ChannelLogo(c,34,plain=true)
-                            Column {Text(c.displayName,color=Color.White,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodyMedium.copy(fontSize=13.sp));
+                        Row(Modifier.fillMaxSize().padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                            if(selected?.id==c.id) Box(Modifier.width(3.dp).height(30.dp).background(NakashColors.Accent,RoundedCornerShape(2.dp)))
+                            Box(Modifier.size(42.dp).background(Color.White.copy(alpha=.06f),RoundedCornerShape(9.dp)),contentAlignment=Alignment.Center){ChannelLogo(c,34,plain=true)}
+                            Column(Modifier.weight(1f)) {Text(c.displayName,color=Color.White,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodyMedium.copy(fontSize=14.sp));
                                 if(c.archiveDays>0) Text("${c.archiveDays} ימי צפייה חוזרת",color=NakashColors.Muted,style=MaterialTheme.typography.labelSmall.copy(fontSize=10.sp))}
                         }
                     }
@@ -117,8 +110,13 @@ fun GuideScreen(nav:NavHostController,vm:GuideViewModel=hiltViewModel()) {
             }
             Column(Modifier.weight(1f).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(10.dp)) {
                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
-                    Text(selected?.displayName ?: "בחרו ערוץ",style=MaterialTheme.typography.titleLarge.copy(fontSize=22.sp),maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f))
-                    selected?.let {GuideButton("● לשידור החי",false,{live(it)})}
+                    Text(selected?.displayName ?: "בחרו ערוץ",style=MaterialTheme.typography.headlineMedium.copy(fontSize=26.sp),maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f))
+                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        selected?.let {GuideButton("● לשידור החי",false,{live(it)})}
+                        GuideButton("צפייה חוזרת",archiveOnly,{archiveOnly=!archiveOnly})
+                        GuideButton(categories.firstOrNull {it.id==category}?.name ?: "כל הערוצים",category!=null,{filters=true})
+                        GuideButton(if(busy) "מעדכנים…" else "עדכון",false,{vm.refresh()})
+                    }
                 }
                 LazyRow(contentPadding=PaddingValues(3.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
                     items((0 downTo -oldest).toList()+listOf(1),key={it}) {offset ->
@@ -140,14 +138,25 @@ fun GuideScreen(nav:NavHostController,vm:GuideViewModel=hiltViewModel()) {
                     items(rows,key={it.id}) {p ->
                         val available=PlaybackPolicy.archiveAvailable(p.start,p.end,p.isFiller,retention,now)
                         val isLive=p.start<=now && p.end>now
-                        Surface(onClick={dialog=p},modifier=Modifier.fillMaxWidth().height(61.dp).onFocusChanged {if(it.isFocused) focusedProgram=p},
-                            shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1f),
+                        val accent=if(isLive) NakashColors.Live else if(available) NakashColors.Accent else Color.Transparent
+                        Surface(onClick={dialog=p},modifier=Modifier.fillMaxWidth().height(68.dp).onFocusChanged {if(it.isFocused) focusedProgram=p},
+                            shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1f),
                             colors=ClickableSurfaceDefaults.colors(containerColor=if(isLive) NakashColors.S2 else NakashColors.S1,focusedContainerColor=NakashColors.S3),
-                            border=ClickableSurfaceDefaults.border(focusedBorder=Border(androidx.compose.foundation.BorderStroke(1.5.dp,Color.White),shape=RoundedCornerShape(6.dp)))) {
-                            Row(Modifier.fillMaxSize().padding(12.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
-                                Column(Modifier.width(50.dp)) {Text(fmtTime(p.start),color=Color.White,style=MaterialTheme.typography.bodyMedium);Text(fmtTime(p.end),color=NakashColors.Muted,style=MaterialTheme.typography.bodySmall)}
-                                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(3.dp)) {Text(p.title,color=Color.White,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.titleMedium.copy(fontSize=15.sp));Text(if(isLive) "● עכשיו בשידור" else if(available) "↶ זמין לצפייה חוזרת" else if(p.start>now) "בהמשך" else "לא זמין בארכיון",color=if(isLive) NakashColors.Accent else NakashColors.Muted,style=MaterialTheme.typography.bodySmall.copy(fontSize=11.sp))}
-                                if(available || isLive) Text("▶",color=Color.White)
+                            border=ClickableSurfaceDefaults.border(focusedBorder=Border(androidx.compose.foundation.BorderStroke(2.dp,Color.White),shape=RoundedCornerShape(10.dp)))) {
+                            Box(Modifier.fillMaxSize()) {
+                                Box(Modifier.align(Alignment.CenterStart).width(4.dp).fillMaxHeight(0.6f).background(accent,RoundedCornerShape(2.dp)))
+                                Row(Modifier.fillMaxSize().padding(start=18.dp,end=14.dp,top=10.dp,bottom=10.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
+                                    Column(Modifier.width(54.dp)) {Text(fmtTime(p.start),color=Color.White,style=MaterialTheme.typography.titleMedium.copy(fontSize=15.sp));Text(fmtTime(p.end),color=NakashColors.Muted,style=MaterialTheme.typography.bodySmall)}
+                                    Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(2.dp)) {
+                                        Text(p.title,color=Color.White,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.titleMedium.copy(fontSize=15.sp))
+                                        val sub=p.description.takeIf {it.isNotBlank() && it!=p.title}
+                                        if(sub!=null) Text(sub,color=NakashColors.Muted,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall.copy(fontSize=12.sp))
+                                    }
+                                    if(isLive) StateChip("● עכשיו",NakashColors.Live) else if(available) StateChip("צפייה חוזרת",NakashColors.Muted) else if(p.start>now) StateChip("בקרוב",NakashColors.Dim) else Unit
+                                }
+                                if(isLive && p.end>p.start) Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color.White.copy(alpha=.10f))) {
+                                    Box(Modifier.fillMaxWidth(((now-p.start).toFloat()/(p.end-p.start)).coerceIn(0f,1f)).fillMaxHeight().background(NakashColors.Live))
+                                }
                             }
                         }
                     }
@@ -166,10 +175,18 @@ fun GuideScreen(nav:NavHostController,vm:GuideViewModel=hiltViewModel()) {
 }
 
 @Composable
+private fun StateChip(label:String,color:Color) {
+    val text=if(color==NakashColors.Live) color else NakashColors.Muted
+    Box(Modifier.background(color.copy(alpha=if(color==NakashColors.Live) .16f else .10f),RoundedCornerShape(7.dp)).padding(horizontal=10.dp,vertical=5.dp)) {
+        Text(label,color=text,style=MaterialTheme.typography.labelSmall.copy(fontSize=11.sp),maxLines=1)
+    }
+}
+
+@Composable
 private fun GuideButton(label:String,selected:Boolean,onClick:()->Unit,modifier:Modifier=Modifier) {
-    Surface(onClick=onClick,modifier=modifier.height(34.dp),shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(5.dp)),
-        scale=ClickableSurfaceDefaults.scale(focusedScale=1f),colors=ClickableSurfaceDefaults.colors(containerColor=if(selected) Color.White.copy(alpha=.13f) else Color.Transparent,focusedContainerColor=Color.White,contentColor=Color.White,focusedContentColor=Color.Black)) {
-        Box(Modifier.fillMaxHeight().padding(horizontal=11.dp),contentAlignment=Alignment.Center) {Text(label,style=MaterialTheme.typography.bodyMedium.copy(fontSize=13.sp))}
+    Surface(onClick=onClick,modifier=modifier.height(36.dp),shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(18.dp)),
+        scale=ClickableSurfaceDefaults.scale(focusedScale=1f),colors=ClickableSurfaceDefaults.colors(containerColor=if(selected) Color.White.copy(alpha=.16f) else Color.Transparent,focusedContainerColor=Color.White,contentColor=Color.White,focusedContentColor=Color.Black)) {
+        Box(Modifier.fillMaxHeight().padding(horizontal=13.dp),contentAlignment=Alignment.Center) {Text(label,style=MaterialTheme.typography.bodyMedium.copy(fontSize=14.sp))}
     }
 }
 

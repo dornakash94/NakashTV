@@ -1,6 +1,20 @@
 package tv.nakash.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,17 +52,45 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import coil3.request.crossfade
 import tv.nakash.data.local.ChannelEntity
 import tv.nakash.data.local.EpgEntity
 import tv.nakash.domain.Normalizer
 import tv.nakash.ui.theme.NakashColors
 
 /**
- * Focus scale 1.08, white 3dp ring, 200ms. Focus changes never recompose the row — only this card.
+ * Netflix-style content row: RTL-correct LazyRow whose focused card is always pulled to the row start
+ * (the right edge in Hebrew), like Netflix — instead of the default minimal-scroll or center pivot.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun NetflixRow(
+    modifier: Modifier = Modifier,
+    state: LazyListState = rememberLazyListState(),
+    contentPadding: PaddingValues = PaddingValues(horizontal = 32.dp, vertical = 12.dp),
+    spacing: Dp = 12.dp,
+    gutter: Dp = 32.dp,
+    content: LazyListScope.() -> Unit,
+) {
+    val gutterPx = with(LocalDensity.current) { gutter.toPx() }
+    // BringIntoViewSpec offsets are visual (left-based), so the RTL anchor is the mirrored right gutter.
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val spec = remember(gutterPx, rtl) { object : BringIntoViewSpec {
+        override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float) =
+            if (rtl) offset - (containerSize - size - gutterPx) else offset - gutterPx
+    } }
+    CompositionLocalProvider(LocalBringIntoViewSpec provides spec) {
+        LazyRow(modifier, state = state, contentPadding = contentPadding, horizontalArrangement = Arrangement.spacedBy(spacing), content = content)
+    }
+}
+
+/**
+ * Netflix-style focus pop: a springy 1.1 scale with a slight overshoot. Focus changes never
+ * recompose the row — only this card.
  */
 @Composable
-fun FocusScale(focused: Boolean, content: @Composable () -> Unit) {
-    val s by animateFloatAsState(if (focused) 1.05f else 1f, tween(150), label = "scale")
+fun FocusScale(focused: Boolean, scale: Float = 1.14f, content: @Composable () -> Unit) {
+    val s by animateFloatAsState(if (focused) scale else 1f, spring(dampingRatio = 0.76f, stiffness = 340f), label = "scale")
     Box(Modifier.scale(s)) { content() }
 }
 
@@ -82,7 +124,7 @@ fun ChannelCard(
     FocusScale(focused) {
         Surface(
             onClick = onClick, onLongClick = onLongClick,
-            modifier = modifier.width(if(compact) 160.dp else 320.dp).height(if(compact) 90.dp else 150.dp).onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus() },
+            modifier = modifier.width(if(compact) 200.dp else 320.dp).height(if(compact) 112.dp else 150.dp).onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus() },
             scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(focusedScale = 1f),
             shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
             colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(containerColor = NakashColors.Tile, focusedContainerColor = NakashColors.S2),
@@ -90,7 +132,7 @@ fun ChannelCard(
         ) {
             Column(Modifier.fillMaxSize().padding(if(compact) 8.dp else 14.dp), verticalArrangement = Arrangement.SpaceBetween) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ChannelLogo(channel,if(compact) 34 else 52)
+                    ChannelLogo(channel,if(compact) 40 else 52)
                     Column(Modifier.weight(1f)) {
                         Text(channel.displayName, style = MaterialTheme.typography.titleLarge.copy(fontSize=if(compact) 12.sp else 18.sp,lineHeight=if(compact) 15.sp else 22.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(stringResource(R.string.channel_number, channel.number), style = MaterialTheme.typography.labelMedium.copy(fontSize=if(compact) 10.sp else 16.sp), color = NakashColors.Muted)
@@ -115,22 +157,22 @@ fun ProgressBar(fraction: Float, color: Color, height: Int = 3) {
     }
 }
 
-/** 200x300 poster. Title/year only in the fallback or on focus. Red progress line for partially watched items. */
+/** 2:3 poster. Title/year only in the fallback or on focus. Red progress line for partially watched items. */
 @Composable
-fun PosterCard(title: String, year: Int?, image: String?, progress: Float?, onFocus: () -> Unit, onClick: () -> Unit, label: String? = null) {
+fun PosterCard(title: String, year: Int?, image: String?, progress: Float?, onFocus: () -> Unit, onClick: () -> Unit, label: String? = null, width: androidx.compose.ui.unit.Dp = 142.dp, backdrop: String? = null, expandable: Boolean = true) {
     var focused by remember { mutableStateOf(false) }
     var failed by remember(image) { mutableStateOf(image == null) }
     FocusScale(focused) {
         Surface(
             onClick = onClick,
-            modifier = Modifier.width(100.dp).height(150.dp).onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus() },
+            modifier = Modifier.width(width).height(width * 1.5f).onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus() },
             scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(focusedScale = 1f),
-            shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+            shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
             colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(containerColor = NakashColors.Tile, focusedContainerColor = NakashColors.Tile),
-            border = androidx.tv.material3.ClickableSurfaceDefaults.border(focusedBorder = androidx.tv.material3.Border(androidx.compose.foundation.BorderStroke(3.dp, Color.White), shape = RoundedCornerShape(8.dp))),
+            border = androidx.tv.material3.ClickableSurfaceDefaults.border(focusedBorder = androidx.tv.material3.Border(androidx.compose.foundation.BorderStroke(2.dp, Color.White), shape = RoundedCornerShape(10.dp))),
         ) {
             Box(Modifier.fillMaxSize()) {
-                if (!failed) AsyncImage(model = image, contentDescription = title, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop, onError = { failed = true })
+                if (!failed) AsyncImage(model = coil3.request.ImageRequest.Builder(coil3.compose.LocalPlatformContext.current).data(image).crossfade(180).build(), contentDescription = title, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop, onError = { failed = true })
                 else Column(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(NakashColors.S3, NakashColors.S1))).padding(16.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(Normalizer.initials(title), style = MaterialTheme.typography.displayLarge, color = NakashColors.Muted)
                     Text(title, style = MaterialTheme.typography.labelLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)

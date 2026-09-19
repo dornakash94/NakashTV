@@ -1,6 +1,7 @@
 package tv.nakash.ui.library
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -47,6 +48,7 @@ class LibraryViewModel @Inject constructor(val catalog: CatalogRepository, val u
 @Composable
 fun Action(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
     Button(onClick = onClick, enabled = enabled, modifier = modifier.heightIn(min = 48.dp),
+        shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
         colors = ButtonDefaults.colors(containerColor = NakashColors.S3, contentColor = NakashColors.Text,
             focusedContainerColor = NakashColors.Accent, focusedContentColor = androidx.compose.ui.graphics.Color.Black)) { Text(label, maxLines=2, overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
 }
@@ -111,12 +113,12 @@ fun LibraryScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = h
         if (visibleMovies.isEmpty() && visibleSeries.isEmpty() && visibleChannels.isEmpty()) {
             Text(when { loading -> "טוענים את הספרייה…"; isSearch && q.isBlank() -> "הקלד שם כדי להתחיל לחפש"; isList -> "תכנים שתוסיף לרשימה יופיעו כאן"; q.isNotBlank() -> "לא נמצאו תוצאות"; else -> "הספרייה עדיין ריקה. בחר רענון כדי לטעון תכנים." }, color = NakashColors.Muted)
         }
-        LazyVerticalGrid(columns = GridCells.Adaptive(200.dp), contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(20.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        LazyVerticalGrid(columns = GridCells.Adaptive(142.dp), contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
             items(visibleChannels, key = { "c${it.id}" }, span = { GridItemSpan(maxLineSpan) }) { c ->
                 Action("${c.number} · ${c.displayName}", { vm.play(c); nav.navigate("player") }, Modifier.fillMaxWidth())
             }
-            items(visibleMovies, key = { "m${it.id}" }) { m -> PosterCard(m.title, m.year, m.poster, null, {}, { nav.navigate("movie/${m.id}") }, m.title) }
-            items(visibleSeries, key = { "s${it.id}" }) { s -> PosterCard(s.title, s.year, s.cover, null, {}, { nav.navigate("seriesDetail/${s.id}") }, s.title) }
+            items(visibleMovies, key = { "m${it.id}" }) { m -> PosterCard(m.title, m.year, m.poster, null, {}, { nav.navigate("movie/${m.id}") }, m.title, expandable = false) }
+            items(visibleSeries, key = { "s${it.id}" }) { s -> PosterCard(s.title, s.year, s.cover, null, {}, { nav.navigate("seriesDetail/${s.id}") }, s.title, expandable = false) }
         }
     }
 }

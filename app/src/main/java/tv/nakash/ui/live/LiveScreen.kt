@@ -11,9 +11,11 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.activity.compose.BackHandler
 import tv.nakash.ui.library.Action
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed as listItemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.runtime.*
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.Alignment
@@ -29,13 +31,16 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Surface
 import androidx.tv.material3.ClickableSurfaceDefaults
 import tv.nakash.player.PreviewPlayer
 import tv.nakash.ui.components.ChannelLogo
+import tv.nakash.ui.components.NetflixRow
 import tv.nakash.ui.components.ProgressBar
 import tv.nakash.util.fmtTime
 import androidx.compose.ui.window.Dialog
@@ -152,6 +157,8 @@ fun LiveScreen(nav: NavHostController, vm: LiveViewModel = hiltViewModel()) {
     val shelves by vm.shelves.collectAsState()
     val rowState=rememberSaveableStateHolder()
     val shelfScroll=rememberLazyListState()
+    var focusedRow by remember {mutableIntStateOf(0)}
+    LaunchedEffect(focusedRow) {runCatching {shelfScroll.animateScrollToItem(focusedRow)}}
     val ends=remember {mutableMapOf<Int,FocusRequester>()}
     var returning by remember {mutableStateOf<Int?>(null)}
     fun closeCategory() {returning=selected;vm.selected.value=null}
@@ -185,46 +192,44 @@ fun LiveScreen(nav: NavHostController, vm: LiveViewModel = hiltViewModel()) {
         val code=event.nativeKeyEvent.keyCode
         if(event.type==KeyEventType.KeyDown && code in 7..16) { digits=(digits+(code-7)).takeLast(4);true } else false
     }) {
-        Box(Modifier.fillMaxWidth().height(210.dp).clipToBounds()) {
+        Box(Modifier.fillMaxWidth().height(330.dp).clipToBounds()) {
             if(focused!=null) AndroidView(factory={ctx -> (android.view.LayoutInflater.from(ctx).inflate(tv.nakash.R.layout.player_preview,null,false) as PlayerView).apply {
                 useController=false;isFocusable=false;descendantFocusability=android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
                 player=vm.previewPlayer;resizeMode=androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
             }},modifier=Modifier.fillMaxSize(),onRelease={it.player=null})
-            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color.Transparent,NakashColors.Bg.copy(.7f),NakashColors.Bg))))
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent,NakashColors.Bg))))
-            Column(Modifier.padding(horizontal=24.dp,vertical=16.dp).fillMaxWidth(.58f),verticalArrangement=Arrangement.spacedBy(5.dp)) {
-                Text("● עכשיו בשידור",color=NakashColors.Accent,style=MaterialTheme.typography.labelLarge.copy(fontSize=12.sp))
+            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color.Transparent,.45f to NakashColors.Bg.copy(.25f),.75f to NakashColors.Bg.copy(.9f),1f to NakashColors.Bg)))
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.55f to Color.Transparent,1f to NakashColors.Bg)))
+            Column(Modifier.align(Alignment.BottomStart).padding(start=32.dp,end=32.dp,bottom=18.dp).fillMaxWidth(.58f),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                Text("● שידור חי",color=NakashColors.Live,style=MaterialTheme.typography.labelLarge.copy(fontSize=13.sp))
                 focused?.let { c ->
-                    Text(c.displayName,style=MaterialTheme.typography.headlineMedium.copy(fontSize=26.sp,lineHeight=30.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
+                    Text(c.displayName,style=MaterialTheme.typography.displayLarge.copy(fontSize=34.sp,lineHeight=38.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
                     val current=now[c.id]
-                    Text(current?.title ?: "שידור חי",style=MaterialTheme.typography.titleLarge.copy(fontSize=18.sp,lineHeight=23.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
+                    Text(current?.title ?: "שידור חי",style=MaterialTheme.typography.titleLarge.copy(fontSize=19.sp,lineHeight=24.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
                     current?.let { p ->
-                        Text("${fmtTime(p.start)}–${fmtTime(p.end)}${next?.let { "  ·  הבא: ${it.title}" } ?: ""}",color=NakashColors.Muted,style=MaterialTheme.typography.labelLarge.copy(fontSize=12.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
-                        Text(p.description,style=MaterialTheme.typography.bodyLarge.copy(fontSize=14.sp,lineHeight=19.sp),maxLines=2,overflow=TextOverflow.Ellipsis)
+                        Text("${fmtTime(p.start)}–${fmtTime(p.end)}${next?.let { "  ·  הבא: ${it.title}" } ?: ""}",color=NakashColors.Muted,style=MaterialTheme.typography.labelLarge.copy(fontSize=13.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
+                        Text(p.description,style=MaterialTheme.typography.bodyLarge.copy(fontSize=14.sp,lineHeight=19.sp),color=Color(0xFFD3D4D8),maxLines=2,overflow=TextOverflow.Ellipsis)
+                        if(p.end>p.start) Box(Modifier.width(420.dp).padding(top=4.dp)) { ProgressBar(((clock-p.start).toFloat()/(p.end-p.start)).coerceIn(0f,1f),NakashColors.Live,3) }
                     }
                 }
             }
-            Text("תצוגה מקדימה · OK לצפייה במסך מלא",Modifier.align(Alignment.BottomEnd).padding(18.dp),color=NakashColors.Muted,style=MaterialTheme.typography.labelLarge.copy(fontSize=11.sp))
+            if(digits.isNotEmpty()) Text(digits,Modifier.align(Alignment.TopEnd).padding(top=64.dp,end=24.dp).background(NakashColors.S1.copy(alpha=.92f),RoundedCornerShape(9.dp)).padding(horizontal=16.dp,vertical=7.dp),style=MaterialTheme.typography.titleLarge.copy(fontSize=20.sp))
+            Text("OK לצפייה במסך מלא",Modifier.align(Alignment.BottomEnd).padding(horizontal=24.dp,vertical=12.dp),color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge.copy(fontSize=11.sp))
         }
         if(selected!=null) tv.nakash.ui.components.CategoryHeading(
             if(selected==-1) "המועדפים שלי" else categories.firstOrNull {it.id==selected}?.name ?: "כל הערוצים",
             ::closeCategory,"${channels.size} ערוצים")
-        else Row(Modifier.fillMaxWidth().padding(horizontal=24.dp,vertical=8.dp),horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
-            Text("ערוצים חיים",style=MaterialTheme.typography.titleLarge.copy(fontSize=20.sp))
-            if(digits.isNotEmpty()) Text(digits,color=NakashColors.Muted)
-        }
-        if(selected==null) LazyColumn(Modifier.weight(1f).clipToBounds().focusRequester(gridFocus).focusGroup(),state=shelfScroll,contentPadding=PaddingValues(bottom=24.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-            items(shelves,key={it.id}) {shelf ->
-                Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
-                    Text(shelf.title,Modifier.padding(horizontal=24.dp),style=MaterialTheme.typography.titleLarge.copy(fontSize=17.sp))
+        if(selected==null) LazyColumn(Modifier.weight(1f).clipToBounds().focusGroup(),state=shelfScroll,contentPadding=PaddingValues(bottom=24.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            listItemsIndexed(shelves,key={_,sh->sh.id}) {shelfIndex,shelf ->
+                Column(verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                    Text(shelf.title,Modifier.padding(horizontal=32.dp),style=MaterialTheme.typography.titleLarge.copy(fontSize=16.sp))
                     rowState.SaveableStateProvider(shelf.id) {
-                        LazyRow(contentPadding=PaddingValues(horizontal=24.dp,vertical=8.dp),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                            items(shelf.channels,key={it.id}) {channel -> Box(Modifier.width(180.dp)) {
-                                LiveTile(channel,now[channel.id],clock,{vm.focus(channel)},{play(channel,category=shelf.id)},{context=channel;contextCategory=shelf.id;vm.context(channel)})
+                        NetflixRow(contentPadding=PaddingValues(horizontal=32.dp,vertical=8.dp)) {
+                            listItemsIndexed(shelf.channels,key={_,c->c.id}) {i,channel -> Box(Modifier.width(200.dp).then(if(shelfIndex==0&&i==0) Modifier.focusRequester(gridFocus).focusGroup() else Modifier)) {
+                                LiveTile(channel,now[channel.id],clock,{focusedRow=shelfIndex;vm.focus(channel)},{play(channel,category=shelf.id)},{context=channel;contextCategory=shelf.id;vm.context(channel)})
                             }}
                             item(key="all") {
-                                Surface(onClick={vm.selected.value=shelf.id},modifier=Modifier.width(180.dp).height(112.dp).focusRequester(ends.getOrPut(shelf.id) {FocusRequester()}),
-                                    shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(9.dp)),colors=ClickableSurfaceDefaults.colors(containerColor=NakashColors.S2,focusedContainerColor=NakashColors.S3)) {
+                                Surface(onClick={vm.selected.value=shelf.id},modifier=Modifier.width(200.dp).height(112.dp).focusRequester(ends.getOrPut(shelf.id) {FocusRequester()}),
+                                    shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),colors=ClickableSurfaceDefaults.colors(containerColor=NakashColors.S2,focusedContainerColor=NakashColors.S3)) {
                                     Column(Modifier.fillMaxSize(),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.Center) {
                                         Text("←",style=MaterialTheme.typography.headlineMedium)
                                         Text("הצג הכול",style=MaterialTheme.typography.titleMedium)
@@ -237,8 +242,8 @@ fun LiveScreen(nav: NavHostController, vm: LiveViewModel = hiltViewModel()) {
                 }
             }
         } else if(channels.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth(),contentAlignment=Alignment.Center) {Text("אין ערוצים בקטגוריה הזו",color=NakashColors.Muted)}
-        else LazyVerticalGrid(columns=GridCells.Fixed(5),modifier=Modifier.weight(1f).padding(horizontal=14.dp).focusRequester(gridFocus).focusGroup(),contentPadding=PaddingValues(10.dp),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-            items(channels,key={it.id}) {channel -> LiveTile(channel,now[channel.id],clock,{vm.focus(channel)},{play(channel)},{context=channel;contextCategory=selected;vm.context(channel)})}
+        else LazyVerticalGrid(columns=GridCells.Fixed(5),modifier=Modifier.weight(1f).padding(horizontal=22.dp).focusGroup(),contentPadding=PaddingValues(10.dp),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+            gridItemsIndexed(channels,key={_,c->c.id}) {i,channel -> Box(if(i==0) Modifier.focusRequester(gridFocus).focusGroup() else Modifier) { LiveTile(channel,now[channel.id],clock,{vm.focus(channel)},{play(channel)},{context=channel;contextCategory=selected;vm.context(channel)}) }}
         }
     }
 
@@ -266,23 +271,30 @@ fun LiveScreen(nav: NavHostController, vm: LiveViewModel = hiltViewModel()) {
 
 @Composable
 private fun LiveTile(c:ChannelEntity,program:EpgEntity?,now:Long,focus:()->Unit,play:()->Unit,menu:()->Unit) {
-    Surface(onClick=play,onLongClick=menu,modifier=Modifier.fillMaxWidth().height(112.dp).onFocusChanged {if(it.isFocused) focus()},
-        scale=ClickableSurfaceDefaults.scale(focusedScale=1.035f),
-        shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),
-        colors=ClickableSurfaceDefaults.colors(containerColor=Color(0xFF16171B),focusedContainerColor=Color(0xFF23252B)),
-        border=ClickableSurfaceDefaults.border(focusedBorder=androidx.tv.material3.Border(androidx.compose.foundation.BorderStroke(1.5.dp,Color.White),shape=RoundedCornerShape(6.dp)))) {
-        Column(Modifier.fillMaxSize().padding(12.dp),verticalArrangement=Arrangement.SpaceBetween) {
-            Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-                ChannelLogo(c,44,plain=true)
-                Text(c.displayName,color=Color.White,style=MaterialTheme.typography.titleLarge.copy(fontSize=14.sp,lineHeight=18.sp),maxLines=2,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f))
-            }
-            Column(verticalArrangement=Arrangement.spacedBy(7.dp)) {
-                Text(program?.title ?: "שידור חי",color=NakashColors.Muted,style=MaterialTheme.typography.bodyMedium.copy(fontSize=12.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
-                if(program!=null && program.end>program.start) {
-                    val progress=((now-program.start).toFloat()/(program.end-program.start)).coerceIn(0f,1f)
-                    Box(Modifier.fillMaxWidth().height(2.dp).background(Color.White.copy(alpha=.13f))) {
-                        Box(Modifier.fillMaxWidth(progress).fillMaxHeight().background(Color.White.copy(alpha=.65f)))
+    var isFocused by remember {mutableStateOf(false)}
+    Surface(onClick=play,onLongClick=menu,modifier=Modifier.fillMaxWidth().height(118.dp).onFocusChanged {isFocused=it.isFocused;if(it.isFocused) focus()},
+        scale=ClickableSurfaceDefaults.scale(focusedScale=1.06f),
+        shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
+        colors=ClickableSurfaceDefaults.colors(containerColor=Color(0xFF17181D),focusedContainerColor=Color(0xFF262932)),
+        border=ClickableSurfaceDefaults.border(focusedBorder=androidx.tv.material3.Border(androidx.compose.foundation.BorderStroke(2.dp,Color.White),shape=RoundedCornerShape(10.dp)))) {
+        Box(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().padding(start=13.dp,end=13.dp,top=12.dp,bottom=14.dp),verticalArrangement=Arrangement.SpaceBetween) {
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(11.dp)) {
+                    Box(Modifier.size(52.dp).clip(RoundedCornerShape(9.dp)).background(Color.White.copy(alpha=.06f)),contentAlignment=Alignment.Center) { ChannelLogo(c,40,plain=true) }
+                    Column(Modifier.weight(1f)) {
+                        Text(c.displayName,color=Color.White,style=MaterialTheme.typography.titleLarge.copy(fontSize=15.sp,lineHeight=18.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
+                        Text("ערוץ ${c.number}",color=NakashColors.Dim,style=MaterialTheme.typography.labelMedium.copy(fontSize=11.sp),maxLines=1)
                     }
+                }
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                    Box(Modifier.size(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(NakashColors.Live))
+                    Text(program?.title ?: "שידור חי",color=if(isFocused) Color.White else NakashColors.Muted,style=MaterialTheme.typography.bodyMedium.copy(fontSize=12.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
+                }
+            }
+            if(program!=null && program.end>program.start) {
+                val progress=((now-program.start).toFloat()/(program.end-program.start)).coerceIn(0f,1f)
+                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color.White.copy(alpha=.10f))) {
+                    Box(Modifier.fillMaxWidth(progress).fillMaxHeight().background(NakashColors.Live))
                 }
             }
         }

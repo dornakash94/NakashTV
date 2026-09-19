@@ -26,3 +26,11 @@ Catchup, DiscoverScreen, SeriesDetail, חיפוש, Guide. אין שינוי בס
 1. `testDebugUnitTest` — הבדיקות הקיימות לא נוגעות בקוד ששונה חוץ מ־PlaybackPreferences (אם יש בדיקה עליו — לעדכן ל־`bindings`).
 2. Release עם `proguard-rules.pro` החדש (היה ריק) — לבדוק login וטעינת קטלוג על התקנה נקייה.
 3. versionCode 3, versionName 0.2.0-beta.1, אותו מפתח חתימה, ולעדכן את ה־Release ב־GitHub (קוד ה־Downloader 4033247 מצביע על v0.1.0 — צריך קוד חדש או להחליף את ה־asset תחת תג חדש).
+
+## Netflix-grade UX pass (2026-09-19)
+
+Navigation moved from the side rail to a top text-tab bar (search and settings as icons); the bar floats over the hero on home/movies/series with a top-down fade, and Back still climbs card → nav → home → exit prompt. "הרשימה שלי" is no longer a nav tab: it is a shelf on home (existing) and now also on movies/series, built from favorites.
+
+Rows were rebuilt on a shared NetflixRow (foundation LazyRow + custom BringIntoViewSpec): the focused card is pulled to the row start with a 32dp gutter, mirrored correctly for RTL, replacing tv-foundation's center pivot. Entry focus is pinned to the first card of the first shelf (Home, Discover, Live, and category grids) instead of Compose's spatial guess, with a retry loop because lazy items attach late (fixes a FocusRequester crash). Category "הצג הכול" now opens a full-screen gallery (heading + count + poster grid) instead of a grid squeezed under the hero.
+
+Cards: posters are 118x177 with a springy 1.1 focus pop and 2.5dp ring; home continue/channel cards grew to 200x112. Hero buttons are translucent until focused (solid white when focused). Screen switches crossfade. Live got a 280dp hero preview with live progress and an on-preview digits chip; the guide got a gold selected-channel marker, live-progress program rows, and pill buttons. Unit tests: 39/39.

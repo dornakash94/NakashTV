@@ -50,12 +50,11 @@ import androidx.navigation.NavHostController
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items as columnItems
+import androidx.compose.foundation.lazy.itemsIndexed as columnItemsIndexed
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.tv.foundation.lazy.list.TvLazyRow
-import androidx.tv.foundation.lazy.list.items
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
@@ -66,6 +65,7 @@ import tv.nakash.data.local.WatchProgressEntity
 import tv.nakash.player.PlayRequest
 import tv.nakash.player.PlayerController
 import tv.nakash.ui.components.ChannelCard
+import tv.nakash.ui.components.NetflixRow
 import tv.nakash.ui.components.PosterCard
 import tv.nakash.ui.components.ProgressBar
 import tv.nakash.ui.theme.NakashColors
@@ -89,7 +89,10 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
     val manualShelfScroll=remember { object:BringIntoViewSpec {
         override fun calculateScrollDistance(offset:Float,size:Float,containerSize:Float)=0f
     } }
-    LaunchedEffect(rows.isNotEmpty()) { if(rows.any { it.items.isNotEmpty() }) { kotlinx.coroutines.delay(250);rowsFocus.requestFocus() } }
+    LaunchedEffect(rows.isNotEmpty()) {
+        // The requester sits on the first card, which the lazy list may not have composed yet — retry briefly.
+        if(rows.any { it.items.isNotEmpty() }) repeat(8) { kotlinx.coroutines.delay(150); if(runCatching { rowsFocus.requestFocus() }.isSuccess) return@LaunchedEffect }
+    }
     fun activate() { when(val h=hero) {
         is HeroItem.Channel -> { playerVm.play(PlayRequest.Live(h.channel));nav.navigate("player") }
         is HeroItem.Movie -> nav.navigate("movie/${h.movie.id}")
@@ -105,7 +108,7 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
         Hero(hero, vm, heroHeight+55.dp, ::activate, {nav.navigate("guide")})
         toast?.let { msg ->
             LaunchedEffect(msg) { kotlinx.coroutines.delay(2_200); vm.clearToast() }
-            Text(msg, style = MaterialTheme.typography.titleLarge, modifier = Modifier.align(Alignment.TopStart).padding(28.dp).background(NakashColors.S1.copy(alpha = .95f), RoundedCornerShape(10.dp)).padding(horizontal = 18.dp, vertical = 12.dp))
+            Text(msg, style = MaterialTheme.typography.titleLarge, modifier = Modifier.align(Alignment.TopStart).padding(top = tv.nakash.ui.nav.NavBarHeight + 8.dp, start = 28.dp).background(NakashColors.S1.copy(alpha = .95f), RoundedCornerShape(10.dp)).padding(horizontal = 18.dp, vertical = 12.dp))
         }
         if(rows.all { it.items.isEmpty() }) Column(Modifier.padding(40.dp), verticalArrangement=Arrangement.spacedBy(16.dp)) {
             Text("ברוכים הבאים ל־NakashTV",style=MaterialTheme.typography.headlineMedium)
@@ -116,29 +119,32 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
         // Automatic card-centering previously left a fragment of the preceding shelf visible.
         CompositionLocalProvider(LocalBringIntoViewSpec provides manualShelfScroll) {
         LazyColumn(
-            Modifier.fillMaxSize().padding(top = heroHeight).clipToBounds().focusRequester(rowsFocus).focusGroup(),
+            Modifier.fillMaxSize().padding(top = heroHeight).clipToBounds().focusGroup(),
             state=shelfState,
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = (maxHeight-heroHeight-128.dp).coerceAtLeast(24.dp)),
+            contentPadding = PaddingValues(bottom = (maxHeight-heroHeight-128.dp).coerceAtLeast(24.dp)),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            columnItems(rows, key = { it.key }) { row ->
+            columnItemsIndexed(rows, key = { _, r -> r.key }) { rowIndex, row ->
                 Column {
-                    Row(verticalAlignment = Alignment.Bottom) {
+                    Row(Modifier.padding(start = 32.dp), verticalAlignment = Alignment.Bottom) {
                         Text(row.title, style = MaterialTheme.typography.titleLarge.copy(fontSize=16.sp,lineHeight=20.sp))
                         row.subtitle?.let { Spacer(Modifier.width(10.dp)); Text(it, style = MaterialTheme.typography.labelLarge.copy(fontSize=12.sp), color = NakashColors.Muted) }
                     }
                     Spacer(Modifier.height(6.dp))
-                    TvLazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp)) {
-                        items(row.items, key = { keyOf(it) }) { item ->
+                    NetflixRow {
+                        columnItemsIndexed(row.items, key = { _, it -> keyOf(it) }) { itemIndex, item ->
+                            // Entry focus goes to the first card of the first row (the RTL start), not a spatial guess.
+                            Box(if (rowIndex == 0 && itemIndex == 0) Modifier.focusRequester(rowsFocus).focusGroup() else Modifier) {
                             when (item) {
                                 is ChannelEntity -> ChannelCard(item, nowMap[item.epgChannelId], nowSec, onFocus = { focusedShelf=row.key;vm.onFocus(item) }, compact=true,
                                     onClick = { playerVm.play(PlayRequest.Live(item)); nav.navigate("player") },
                                     onLongClick = { vm.toggleFavorite(item) })
-                                is MovieEntity -> PosterCard(item.title, item.year, item.poster, null, onFocus = { focusedShelf=row.key;vm.onFocus(item) }, onClick = { nav.navigate("movie/${item.id}") })
-                                is SeriesEntity -> PosterCard(item.title, item.year, item.cover, null, onFocus = { focusedShelf=row.key;vm.onFocus(item) }, onClick = { nav.navigate("seriesDetail/${item.id}") })
+                                is MovieEntity -> PosterCard(item.title, item.year, item.poster, null, onFocus = { focusedShelf=row.key;vm.onFocus(item) }, onClick = { nav.navigate("movie/${item.id}") }, backdrop = item.backdrop)
+                                is SeriesEntity -> PosterCard(item.title, item.year, item.cover, null, onFocus = { focusedShelf=row.key;vm.onFocus(item) }, onClick = { nav.navigate("seriesDetail/${item.id}") }, backdrop = item.backdrop)
                                 is ContinueItem -> ContinueCard(item, onFocus = { focusedShelf=row.key;vm.onFocus(item) }, onClick = {
                                     when (item.progress.kind) { "movie" -> nav.navigate("movie/${item.progress.refId}"); "episode" -> item.progress.seriesId?.let { nav.navigate("seriesDetail/$it") }; "channel" -> playerVm.playChannelId(item.progress.refId.toInt()) { nav.navigate("player") } }
                                 })
+                            }
                             }
                         }
                     }
@@ -174,7 +180,7 @@ private fun Hero(hero: HeroItem?, vm: HomeViewModel, height: androidx.compose.ui
                 // one fade layer above the media: opaque toward the text (right, RTL) and toward the rows (bottom)
                 Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color.Transparent, .45f to NakashColors.Bg.copy(.2f), .7f to NakashColors.Bg.copy(.85f), 1f to NakashColors.Bg)))
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.5f to Color.Transparent, 1f to NakashColors.Bg)))
-                Column(Modifier.align(Alignment.TopStart).padding(start = 28.dp, top = 50.dp).fillMaxWidth(0.56f)) {
+                Column(Modifier.align(Alignment.BottomStart).padding(start = 28.dp, bottom = 78.dp).fillMaxWidth(0.56f)) {
                     when (h) {
                         is HeroItem.Channel -> {
                             Text("● שידור חי · ${h.channel.displayName}", style = MaterialTheme.typography.labelLarge.copy(fontSize=12.sp), color = NakashColors.Accent)
@@ -204,7 +210,7 @@ private fun Hero(hero: HeroItem?, vm: HomeViewModel, height: androidx.compose.ui
                 }
             }
         }
-        if(hero is HeroItem.Channel) Box(Modifier.align(Alignment.TopEnd).padding(20.dp)) {
+        if(hero is HeroItem.Channel) Box(Modifier.align(Alignment.TopEnd).padding(top = tv.nakash.ui.nav.NavBarHeight + 8.dp, end = 20.dp)) {
             androidx.tv.material3.Surface(onClick=vm::togglePreviewMute,
                 shape=androidx.tv.material3.ClickableSurfaceDefaults.shape(androidx.compose.foundation.shape.CircleShape),
                 colors=androidx.tv.material3.ClickableSurfaceDefaults.colors(containerColor=Color.Black.copy(.55f),focusedContainerColor=NakashColors.S3)) {
@@ -226,7 +232,7 @@ private fun ContinueCard(item: ContinueItem, onFocus: () -> Unit, onClick: () ->
     val p=item.progress
     val fraction=if(p.durationMs>0) (p.positionMs.toFloat()/p.durationMs).coerceIn(0f,1f) else 0f
     androidx.tv.material3.Surface(onClick=onClick,
-        modifier=Modifier.width(160.dp).height(90.dp).then(Modifier.onFocusChanged { if(it.isFocused) onFocus() }),
+        modifier=Modifier.width(200.dp).height(112.dp).then(Modifier.onFocusChanged { if(it.isFocused) onFocus() }),
         shape=androidx.tv.material3.ClickableSurfaceDefaults.shape(androidx.compose.foundation.shape.RoundedCornerShape(10.dp)),
         colors=androidx.tv.material3.ClickableSurfaceDefaults.colors(containerColor=NakashColors.Tile,focusedContainerColor=NakashColors.S2),
         scale=androidx.tv.material3.ClickableSurfaceDefaults.scale(focusedScale=1.05f)) {
@@ -255,8 +261,8 @@ class PlayerEntry @Inject constructor(private val controller: PlayerController, 
 @Composable
 private fun HeroButton(label:String,primary:Boolean,onClick:()->Unit) {
     androidx.tv.material3.Surface(onClick=onClick,
-        shape=androidx.tv.material3.ClickableSurfaceDefaults.shape(androidx.compose.foundation.shape.RoundedCornerShape(5.dp)),
-        colors=androidx.tv.material3.ClickableSurfaceDefaults.colors(containerColor=if(primary) Color.White else Color(0xFF343434),contentColor=if(primary) Color.Black else Color.White,focusedContainerColor=NakashColors.Accent,focusedContentColor=Color.Black)) {
-        Text(label,Modifier.padding(horizontal=16.dp,vertical=8.dp),style=MaterialTheme.typography.labelLarge.copy(fontSize=14.sp))
+        shape=androidx.tv.material3.ClickableSurfaceDefaults.shape(androidx.compose.foundation.shape.RoundedCornerShape(12.dp)),
+        colors=androidx.tv.material3.ClickableSurfaceDefaults.colors(containerColor=if(primary) Color.White.copy(alpha=.24f) else Color.White.copy(alpha=.12f),contentColor=Color.White,focusedContainerColor=Color.White,focusedContentColor=Color.Black)) {
+        Text(label,Modifier.padding(horizontal=18.dp,vertical=9.dp),style=MaterialTheme.typography.labelLarge.copy(fontSize=15.sp))
     }
 }

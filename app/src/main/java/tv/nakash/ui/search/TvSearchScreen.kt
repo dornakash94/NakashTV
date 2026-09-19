@@ -127,7 +127,7 @@ fun TvSearchScreen(nav:NavHostController,vm:TvSearchViewModel=hiltViewModel()) {
                 Text("לא מצאנו תוצאות ל־״$query״",style=MaterialTheme.typography.titleLarge)
                 Text("אפשר לחפש גם לפי שחקן, ז׳אנר או מספר ערוץ",color=NakashColors.Muted,style=MaterialTheme.typography.bodyLarge.copy(fontSize=16.sp))
             }
-            LazyVerticalGrid(GridCells.Adaptive(108.dp),Modifier.weight(1f).focusRequester(resultFocus),contentPadding=PaddingValues(8.dp),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(18.dp)) {
+            LazyVerticalGrid(GridCells.Adaptive(142.dp),Modifier.weight(1f).focusRequester(resultFocus),contentPadding=PaddingValues(8.dp),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(18.dp)) {
                 items(results.items,key={it.document.id}) {tile ->
                     Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
                         val channel=tile.channel
@@ -137,7 +137,7 @@ fun TvSearchScreen(nav:NavHostController,vm:TvSearchViewModel=hiltViewModel()) {
                                 Spacer(Modifier.height(14.dp))
                                 Text(channel.displayName,maxLines=2,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelLarge.copy(fontSize=14.sp))
                             }
-                        } else PosterCard(tile.document.title,tile.year,tile.image,null,{}, {nav.navigate(if(tile.kind=="סרט") "movie/${tile.ref}" else "seriesDetail/${tile.ref}")},tile.document.title)
+                        } else PosterCard(tile.document.title,tile.year,tile.image,null,{}, {nav.navigate(if(tile.kind=="סרט") "movie/${tile.ref}" else "seriesDetail/${tile.ref}")},tile.document.title,expandable=false)
                         Text(tile.document.title,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelLarge.copy(fontSize=13.sp))
                         Text(listOfNotNull(tile.kind,tile.year?.toString()).joinToString(" · "),color=NakashColors.Muted,style=MaterialTheme.typography.labelLarge.copy(fontSize=11.sp))
                     }

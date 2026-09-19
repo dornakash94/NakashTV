@@ -28,7 +28,7 @@ fun CategoryHeading(title:String,onBack:()->Unit,subtitle:String?=null,modifier:
                 Icon(Icons.Default.ArrowForward,contentDescription=stringResource(R.string.back_to_browse),tint=Color.White,modifier=Modifier.size(22.dp))
             }
         }
-        Text(title,style=MaterialTheme.typography.titleLarge.copy(fontSize=20.sp),maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f,false))
+        Text(title,style=MaterialTheme.typography.headlineMedium.copy(fontSize=24.sp),maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f,false))
         subtitle?.let {Text(it,color=NakashColors.Muted,style=MaterialTheme.typography.labelLarge.copy(fontSize=12.sp))}
     }
 }
