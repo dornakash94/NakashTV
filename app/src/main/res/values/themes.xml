@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.NakashTV" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0A0A0C</item>
+        <item name="android:statusBarColor">#0A0A0C</item>
+    </style>
+</resources>

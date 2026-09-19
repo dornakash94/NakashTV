@@ -1,0 +1,42 @@
+<resources>
+    <string name="app_name">NakashTV</string>
+    <string name="nav_search">חיפוש</string>
+    <string name="nav_home">בית</string>
+    <string name="nav_live">ערוצים חיים</string>
+    <string name="nav_guide">לוח שידורים</string>
+    <string name="nav_movies">סרטים</string>
+    <string name="nav_series">סדרות</string>
+    <string name="nav_mylist">הרשימה שלי</string>
+    <string name="nav_settings">הגדרות</string>
+    <string name="now_playing">עכשיו</string>
+    <string name="next_up">הבא</string>
+    <string name="continue_watching">המשך צפייה</string>
+    <string name="on_now">עכשיו בשידור</string>
+    <string name="new_in_service">חדש בשירות</string>
+    <string name="new_episodes">פרקים חדשים</string>
+    <string name="archive_days">ארכיון %1$d ימים</string>
+    <string name="no_epg">ללא לוח שידורים</string>
+    <string name="switched_to_backup">עברנו למקור גיבוי</string>
+    <string name="channel_unavailable">הערוץ לא זמין כרגע</string>
+    <string name="login_server">שרת</string>
+    <string name="login_user">שם משתמש</string>
+    <string name="login_pass">סיסמה</string>
+    <string name="login_go">כניסה</string>
+    <string name="live_favorites">מועדפים</string>
+    <string name="live_hint">לחיצה ארוכה לאפשרויות · הקלד מספר ערוץ</string>
+    <string name="live_empty">אין ערוצים בקטגוריה זו</string>
+    <string name="world_open">עולם +</string>
+    <string name="world_close">עולם −</string>
+    <string name="restore_hidden">הצג ערוצים שהוסתרו</string>
+    <string name="add_favorite">הוסף למועדפים</string>
+    <string name="remove_favorite">הסר ממועדפים</string>
+    <string name="hide_channel">הסתר ערוץ</string>
+    <string name="source_primary">מקור ראשי</string>
+    <string name="source_backup">גיבוי</string>
+    <string name="source_accessible">תיאור קולי</string>
+    <string name="source_russian">רוסית</string>
+    <string name="close">סגור</string>
+    <string name="channel_number">ערוץ %1$d</string>
+    <string name="back_to_browse">Back</string>
+</resources>
+

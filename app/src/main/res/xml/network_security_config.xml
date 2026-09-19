@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The configured provider supports HTTP on port 80; allow its host explicitly. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false"/>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">ilvip.net</domain>
+        <domain includeSubdomains="true">ilvip11.net</domain>
+        <!-- Explicitly approved provider playback host. -->
+        <domain includeSubdomains="false">ilvip20.net</domain>
+        <domain includeSubdomains="false">ilvipl2.net</domain>
+        <domain includeSubdomains="false">ilvipl1.net</domain>
+        <domain includeSubdomains="false">50.7.204.26</domain>
+        <domain includeSubdomains="true">tmsimg.com</domain>
+    </domain-config>
+</network-security-config>
