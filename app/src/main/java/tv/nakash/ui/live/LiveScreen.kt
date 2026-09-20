@@ -192,13 +192,13 @@ fun LiveScreen(nav: NavHostController, vm: LiveViewModel = hiltViewModel()) {
         val code=event.nativeKeyEvent.keyCode
         if(event.type==KeyEventType.KeyDown && code in 7..16) { digits=(digits+(code-7)).takeLast(4);true } else false
     }) {
-        Box(Modifier.fillMaxWidth().height(330.dp).clipToBounds()) {
+        Box(Modifier.fillMaxWidth().height(300.dp).clipToBounds()) {
             if(focused!=null) AndroidView(factory={ctx -> (android.view.LayoutInflater.from(ctx).inflate(tv.nakash.R.layout.player_preview,null,false) as PlayerView).apply {
                 useController=false;isFocusable=false;descendantFocusability=android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
                 player=vm.previewPlayer;resizeMode=androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
             }},modifier=Modifier.fillMaxSize(),onRelease={it.player=null})
             Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color.Transparent,.45f to NakashColors.Bg.copy(.25f),.75f to NakashColors.Bg.copy(.9f),1f to NakashColors.Bg)))
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.55f to Color.Transparent,1f to NakashColors.Bg)))
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Transparent,.5f to Color.Transparent,.82f to NakashColors.Bg,1f to NakashColors.Bg)))
             Column(Modifier.align(Alignment.BottomStart).padding(start=32.dp,end=32.dp,bottom=18.dp).fillMaxWidth(.58f),verticalArrangement=Arrangement.spacedBy(6.dp)) {
                 Text("● שידור חי",color=NakashColors.Live,style=MaterialTheme.typography.labelLarge.copy(fontSize=13.sp))
                 focused?.let { c ->

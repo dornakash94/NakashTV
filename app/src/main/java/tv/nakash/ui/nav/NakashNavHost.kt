@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +29,8 @@ import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +53,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -96,6 +100,8 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
     val navFocus = remember { FocusRequester() }        // the nav item of the current section
     var navFocused by remember { mutableStateOf(false) }
     var exitPrompt by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    fun focusNav() { scope.launch { repeat(6) { if (runCatching { navFocus.requestFocus() }.isSuccess) return@launch; kotlinx.coroutines.delay(40) } } }
     val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
 
     /**
@@ -106,7 +112,7 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
     BackHandler(enabled = !fullscreen) {
         when {
             route !in Dest.topLevel -> nav.popBackStack()
-            !navFocused -> runCatching { navFocus.requestFocus() }
+            !navFocused -> focusNav()
             route == "home" -> exitPrompt = true
             else -> nav.navigate("home") { launchSingleTop = true; popUpTo("home") { inclusive = true } }
         }
@@ -183,8 +189,12 @@ private fun NavTab(d: Dest, active: Boolean, iconOnly: Boolean, modifier: Modifi
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(16.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = Color.Transparent, focusedContainerColor = Color.White,
+            containerColor = if (active) Color.White.copy(alpha = .07f) else Color.Transparent, focusedContainerColor = Color.White,
             contentColor = if (active) NakashColors.Text else NakashColors.Muted, focusedContentColor = Color.Black,
+        ),
+        border = ClickableSurfaceDefaults.border(
+            border = if (active) Border(BorderStroke(1.5.dp, Color.White.copy(alpha = .55f)), shape = RoundedCornerShape(16.dp)) else Border.None,
+            focusedBorder = Border.None,
         ),
     ) {
         Box(Modifier.fillMaxHeight().padding(horizontal = if (iconOnly) 7.dp else 13.dp), contentAlignment = Alignment.Center) {
