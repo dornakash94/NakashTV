@@ -15,8 +15,8 @@ android {
         testInstrumentationRunner = "tv.nakash.TvSmokeRunner"
         minSdk = 24
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.2.0-beta.1"
+        versionCode = 4
+        versionName = "0.2.0-beta.2"
         buildConfigField("String", "USER_AGENT", "\"NakashTV/0.1 (Android TV)\"")
     }
     signingConfigs {

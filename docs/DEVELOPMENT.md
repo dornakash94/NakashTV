@@ -25,3 +25,7 @@ Downloader code 4033247 currently points specifically to the v0.1.0-beta.1 APK a
 ## Integration validation
 
 assembleDebug and all 39 unit tests passed on 2026-09-19 after the missing declarations were restored. Installed as an in-place debug update on the original Android TV emulator. Release/R8 validation for 0.2 has not yet been run.
+
+## Release 0.2.0-beta.2 (2026-09-20)
+
+Published the Netflix-grade UI overhaul as v0.2.0-beta.2 (versionCode 4), release-signed with the NakashTV distribution key (same certificate as prior releases, so it updates in place). APK attached to GitHub release v0.2.0-beta.2 as NakashTV.apk. Downloader code 4033247 still points at the old v0.1.0-beta.1 asset; create a new Downloader code for the v0.2.0-beta.2 asset URL (Downloader codes do not follow tags automatically).
