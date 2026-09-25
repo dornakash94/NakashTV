@@ -27,6 +27,7 @@ import tv.nakash.data.local.EpgEntity
 import tv.nakash.data.remote.ApiProvider
 import tv.nakash.data.repo.CatalogRepository
 import tv.nakash.data.repo.UserRepository
+import tv.nakash.domain.PlaybackPolicy
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -49,6 +50,8 @@ data class PlayerUiState(
     val error: String? = null,
     val toast: String? = null,
     val usedTsFallback: Boolean = false,
+    /** Catch-up: the absolute time (epoch s) the current timeshift chunk starts at. Wall clock = this + position. */
+    val archiveStart: Long = 0,
 )
 
 /**
@@ -75,6 +78,11 @@ class PlayerController @Inject constructor(
     private var stallJob: Job? = null
     private var progressJob: Job? = null
     private var m3u8Failures = 0
+    private var chunkStartedAt = 0L
+    /** Broadcast time when the current catch-up chunk was requested: the provider serves recorded minutes only up to it. */
+    private var chunkRequestedAt = 0L
+    /** A notice for the next state (play() rebuilds the state, so a toast set right before it would be lost). */
+    private var pendingToast: String? = null
 
     private fun build(): ExoPlayer {
         val dsf = OkHttpDataSource.Factory(okHttp) // carries the fixed User-Agent + auth interceptor
@@ -113,17 +121,19 @@ class PlayerController @Inject constructor(
                 is PlayRequest.Live -> {
                     val sources = catalog.sources(req.channel.id).ifEmpty { listOf(ChannelSourceEntity(req.channel.id, req.channel.id, "PRIMARY", 0, req.channel.archiveDays > 0, req.channel.archiveDays)) }
                     val sourceIndex = req.sourceIndex.coerceIn(0, sources.lastIndex)
-                    _state.value = PlayerUiState(request = req, sources = sources, sourceIndex = sourceIndex, isLive = true)
+                    _state.value = PlayerUiState(request = req, sources = sources, sourceIndex = sourceIndex, isLive = true, toast = pendingToast.also { pendingToast = null })
                     setUrl(api.urls().live(sources[sourceIndex].streamId), req.channel.displayName, live = true)
                     user.saveProgress("channel", req.channel.id.toString(), 0, 0)
                 }
                 is PlayRequest.Archive -> {
-                    val prim = catalog.sources(req.channel.id).firstOrNull { it.tvArchive } ?: catalog.sources(req.channel.id).firstOrNull()
-                    val sid = prim?.streamId ?: req.channel.id
-                    _state.value = PlayerUiState(request = req, isLive = false)
-                    val offset=tv.nakash.domain.PlaybackPolicy.archiveOffsetSeconds(req.program.start,req.program.end,System.currentTimeMillis()/1000,req.offsetSeconds)
-                    val archiveStart=req.program.start+offset
-                    setUrl(api.urls().timeshift(sid, archiveStart, tv.nakash.domain.PlaybackPolicy.archiveMinutes(archiveStart,req.program.end)), req.program.title, live = false)
+                    val sources = catalog.sources(req.channel.id)
+                    val sid = (sources.firstOrNull { it.tvArchive } ?: sources.firstOrNull())?.streamId ?: req.channel.id
+                    // Continuous catch-up: from any past minute up to the live edge, across guide program boundaries.
+                    val now = System.currentTimeMillis() / 1000
+                    val start = PlaybackPolicy.timeshiftStart(req.program.start + req.offsetSeconds, now, req.channel.archiveDays)
+                    _state.value = PlayerUiState(request = req, isLive = false, archiveStart = start)
+                    chunkStartedAt = System.currentTimeMillis(); chunkRequestedAt = now
+                    setUrl(api.urls().timeshift(sid, start, PlaybackPolicy.timeshiftMinutes(start, now)), req.program.title, live = false)
                 }
                 is PlayRequest.Movie -> {
                     _state.value = PlayerUiState(request = req, isLive = false)
@@ -177,6 +187,13 @@ class PlayerController @Inject constructor(
 
     private fun armStallTimer() {
         stallJob?.cancel()
+        // Catch-up that reached what the provider had recorded when it was requested: the stream is over even if
+        // the connection lingers. Continue right away instead of sitting on a spinner until it closes.
+        val archive = _state.value.request as? PlayRequest.Archive
+        if (archive != null && _state.value.archiveStart + player.currentPosition / 1000 >= chunkRequestedAt - 90) {
+            stallJob = scope.launch { delay(2_500); if (player.playbackState == Player.STATE_BUFFERING) continueTimeshift(archive) }
+            return
+        }
         stallJob = scope.launch {
             delay(if(_state.value.isLive) 10_000 else 25_000)
             if(player.playbackState == Player.STATE_BUFFERING) {
@@ -254,11 +271,28 @@ class PlayerController @Inject constructor(
         }
     }
 
+    /**
+     * A catch-up chunk ended. Keep going like real TV: request the next chunk from where it stopped, or — once
+     * caught up with the broadcast (or if the server returned an empty chunk) — switch to live instead of freezing.
+     */
+    private fun continueTimeshift(req: PlayRequest.Archive) {
+        val now = System.currentTimeMillis() / 1000
+        val reached = _state.value.archiveStart + player.currentPosition / 1000
+        val playedMs = System.currentTimeMillis() - chunkStartedAt
+        if (PlaybackPolicy.nearLive(reached, now) || playedMs < 20_000) {
+            pendingToast = "הגעת לשידור החי"
+            play(PlayRequest.Live(req.channel))
+            return
+        }
+        play(req.copy(offsetSeconds = reached - req.program.start))
+    }
+
     /** Series: ended -> mark watched; the UI observes `ended` to offer the next episode. */
     private val _ended = MutableStateFlow(0L)
     val ended: StateFlow<Long> = _ended
     private fun onEnded() {
         val req = _state.value.request
+        if (req is PlayRequest.Archive) { continueTimeshift(req); return }
         val duration = player.duration
         scope.launch(Dispatchers.IO) {
             when (req) {

@@ -2,6 +2,7 @@ package tv.nakash.data.repo
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -26,6 +27,8 @@ class EpgRepository @Inject constructor(
     private val channelDao: ChannelDao,
 ) {
     fun range(epgId: String, from: Long, to: Long): Flow<List<EpgEntity>> = epgDao.range(epgId, from, to)
+    /** One-shot read of a channel's programs overlapping [from, to), oldest first. */
+    suspend fun programs(epgId: String?, from: Long, to: Long): List<EpgEntity> = epgId?.let { epgDao.range(it, from, to).first() } ?: emptyList()
     suspend fun nowPlaying(epgId: String?): EpgEntity? = epgId?.let { epgDao.nowPlaying(it, now()) }?.takeIf { !it.isFiller }
     suspend fun nowAndNext(epgId: String?): Pair<EpgEntity?, EpgEntity?> {
         if (epgId == null) return null to null

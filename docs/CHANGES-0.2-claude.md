@@ -34,3 +34,14 @@ Navigation moved from the side rail to a top text-tab bar (search and settings a
 Rows were rebuilt on a shared NetflixRow (foundation LazyRow + custom BringIntoViewSpec): the focused card is pulled to the row start with a 32dp gutter, mirrored correctly for RTL, replacing tv-foundation's center pivot. Entry focus is pinned to the first card of the first shelf (Home, Discover, Live, and category grids) instead of Compose's spatial guess, with a retry loop because lazy items attach late (fixes a FocusRequester crash). Category "הצג הכול" now opens a full-screen gallery (heading + count + poster grid) instead of a grid squeezed under the hero.
 
 Cards: posters are 118x177 with a springy 1.1 focus pop and 2.5dp ring; home continue/channel cards grew to 200x112. Hero buttons are translucent until focused (solid white when focused). Screen switches crossfade. Live got a 280dp hero preview with live progress and an on-preview digits chip; the guide got a gold selected-channel marker, live-progress program rows, and pill buttons. Unit tests: 39/39.
+
+## Channel catch-up rework (2026-09-25)
+
+Reproduced on the emulator: catch-up froze on the last frame at the guide's end time (no message, no continuation, no return to live), cut off shows that ran past their guide slot, moved one minute per press, and could only restart the current show from inside a channel.
+
+- Continuous timeline: a timeshift request starts at any past minute inside the archive window and runs past the present (FUTURE_MARGIN_MIN, capped at CHUNK_MAX_MIN) instead of ending at the guide program's end. Playback carries straight into the next shows. When a chunk ends the controller chains the next one from where it stopped, or switches to live with a "הגעת לשידור החי" notice once it has caught up (or if the server returned an empty chunk). PlayerUiState.archiveStart is the chunk's absolute start; wall clock = archiveStart + position.
+- Live rewind: ◀ from live opens the channel timeline at least 3 minutes back (rewindLimit), where the archive exists. ◀▶ move a minute per tap and accelerate to 5 and 15 minutes when held; scrubbing pauses on every show start it crosses (snapToProgramStart) so holding ◀ lands on the beginning of a show. OK or 1.6 s idle commits; ▼ cancels (live) or returns to live (catch-up). Media rewind/fast-forward keys work too. Channels without archive show "בערוץ הזה אין צפייה חוזרת".
+- In-channel catch-up list: ▲ while rewinding or in catch-up, or the "תוכניות קודמות" bar button, opens the channel's aired shows (up to 3 days, newest first, current show as "מההתחלה"); OK plays from the show's start.
+- Overlay shows broadcast clock times only (target time, show start/end, how far behind live) instead of mixing wall clock with elapsed/remaining counters.
+
+Tests: PlaybackPolicyTest covers the window, duration, live-edge, acceleration and snapping rules (45 unit tests pass).

@@ -80,7 +80,7 @@ class ThumbnailGenerator @Inject constructor(@ApplicationContext ctx:Context) {
                             next.setDataSource(target.url,mapOf("User-Agent" to BuildConfig.USER_AGENT))
                             source=target.url;unavailable.value=null
                         }
-                        for(offset in listOf(0,1,-1,2,-2,3,-3)) {
+                        for(offset in listOf(0,1,-1,2,-2,3,-3,4,-4)) {
                             if(latest!=target) break
                             val second=(target.seconds+offset*STEP_SEC).coerceIn(0,target.duration-1)/STEP_SEC*STEP_SEC
                             if(existing(target.key,second)!=null) continue
