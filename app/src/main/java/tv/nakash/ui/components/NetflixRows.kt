@@ -59,7 +59,7 @@ data class RowCard(
     val poster: String? = null, val wide: String? = null,
     val meta: String = "", val plot: String? = null, val progress: Float? = null, val label: String? = null,
     val channel: ChannelEntity? = null, val nowTitle: String? = null,
-    val trailer: (suspend () -> String?)? = null,
+    val extras: (suspend () -> tv.nakash.domain.TmdbDetails?)? = null,
     val onFocus: () -> Unit = {}, val onClick: () -> Unit, val onLongClick: (() -> Unit)? = null,
 )
 data class RowShelf(val key: String, val title: String, val subtitle: String? = null, val cards: List<RowCard>, val onShowAll: (() -> Unit)? = null)
@@ -88,12 +88,13 @@ fun NetflixRowsPage(
     val list = rememberLazyListState()
     val rowState = rememberSaveableStateHolder()
     // trailers
-    val trailerKeys = remember(restoreKey) { mutableStateMapOf<String, String?>() }
-    suspend fun trailerOf(c: RowCard): String? {
-        val lookup = c.trailer ?: return null
-        if (trailerKeys.containsKey(c.key)) return trailerKeys[c.key]
-        return runCatching { lookup() }.getOrNull().also { trailerKeys[c.key] = it }
+    val extras = remember(restoreKey) { mutableStateMapOf<String, tv.nakash.domain.TmdbDetails?>() }
+    suspend fun extrasOf(c: RowCard): tv.nakash.domain.TmdbDetails? {
+        val lookup = c.extras ?: return null
+        if (extras.containsKey(c.key)) return extras[c.key]
+        return runCatching { lookup() }.getOrNull().also { extras[c.key] = it }
     }
+    suspend fun trailerOf(c: RowCard): String? = extrasOf(c)?.trailerKey
     var stageOrigin by remember { mutableStateOf(Offset.Zero) }
     var cardBounds by remember { mutableStateOf<Rect?>(null) }
     var want by remember { mutableStateOf<String?>(null) }
@@ -103,7 +104,7 @@ fun NetflixRowsPage(
         want = null
         val c = focused ?: return@LaunchedEffect
         if (c.kind != CardKind.POSTER) return@LaunchedEffect
-        delay(900); want = trailerOf(c)
+        delay(350); want = trailerOf(c)
     }
     LaunchedEffect(focusedShelf, shelves) {
         val i = shelves.indexOfFirst { it.key == focusedShelf }
@@ -142,7 +143,7 @@ fun NetflixRowsPage(
                                     Box(if (i == 0) Modifier.focusRequester(rowFirst).then(if (shelfIndex == 0) Modifier.focusRequester(firstFocus) else Modifier) else Modifier) {
                                         val onF = { focusedShelf = shelf.key; focusedCard = c.key; c.onFocus() }
                                         when (c.kind) {
-                                            CardKind.POSTER -> PosterExpandingCard(c, isFocused, isFocused && playing != null && playing == target?.key, { if (isFocused) cardBounds = it }, onF)
+                                            CardKind.POSTER -> PosterExpandingCard(c.copy(wide = extras[c.key]?.backdrop ?: c.wide), isFocused, isFocused && playing != null && playing == target?.key, { if (isFocused) cardBounds = it }, onF)
                                             CardKind.WIDE -> WideCard(c, onF)
                                             CardKind.CHANNEL -> ChannelWideCard(c, isFocused, previewPlayer, isFocused && previewHasFrame, onF)
                                         }

@@ -205,7 +205,7 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
         val density=androidx.compose.ui.platform.LocalDensity.current
         val screen=with(density) {androidx.compose.ui.geometry.Rect(0f,0f,maxWidth.toPx(),maxHeight.toPx())}
         tv.nakash.ui.components.TrailerStage(if(trailerOn && trailerKey!=null) tv.nakash.ui.components.TrailerTarget(trailerKey,screen,0f) else null,onPlaying={stagePlaying=it})
-        AsyncImage(movie?.backdrop ?: show?.backdrop ?: tmdb?.backdrop ?: movie?.poster ?: show?.cover,null,Modifier.fillMaxSize().graphicsLayer {alpha=bgAlpha},contentScale=ContentScale.Crop)
+        AsyncImage(tmdb?.backdrop?.replace("/w1280/","/original/") ?: movie?.backdrop ?: show?.backdrop ?: movie?.poster ?: show?.cover,null,Modifier.fillMaxSize().graphicsLayer {alpha=bgAlpha},contentScale=ContentScale.Crop)
         // Text side (right, RTL) darkened; the rest of the picture stays clear.
         Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color.Transparent,.40f to Color.Transparent,.72f to Color.Black.copy(alpha=.62f),1f to Color.Black.copy(alpha=.86f))))
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.6f to Color.Transparent,1f to Color.Black.copy(alpha=.55f))))

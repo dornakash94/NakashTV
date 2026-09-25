@@ -50,7 +50,7 @@ class TmdbRepository @Inject constructor(okHttp: OkHttpClient, private val prefs
 
     private fun details(kind: String, id: Int, key: String): TmdbDetails? {
         val body = get(url("$kind/$id", key) { addQueryParameter("append_to_response", append); addQueryParameter("include_video_language", "he,en,null") }) ?: return null
-        return runCatching { TmdbParser.details(body, kind == "tv") }.getOrNull()
+        return runCatching { TmdbParser.details(body, kind == "tv") }.onFailure { android.util.Log.w("NakashTrailer", "tmdb parse ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
     }
 
     private fun search(kind: String, title: String, year: Int?, key: String): Int? {
@@ -73,9 +73,9 @@ class TmdbRepository @Inject constructor(okHttp: OkHttpClient, private val prefs
         if (file.isFile && System.currentTimeMillis() - file.lastModified() < 7 * 86_400_000L) return file.readText()
         return runCatching {
             client.newCall(Request.Builder().url(url).build()).execute().use { r ->
-                if (!r.isSuccessful) return@use null
+                if (!r.isSuccessful) { android.util.Log.w("NakashTrailer", "tmdb http ${r.code}"); return@use null }
                 r.body?.string()?.also { file.writeText(it) }
             }
-        }.getOrNull() ?: file.takeIf { it.isFile }?.readText()
+        }.onFailure { android.util.Log.w("NakashTrailer", "tmdb failed ${it.javaClass.simpleName}: ${it.message}") }.getOrNull() ?: file.takeIf { it.isFile }?.readText()
     }
 }

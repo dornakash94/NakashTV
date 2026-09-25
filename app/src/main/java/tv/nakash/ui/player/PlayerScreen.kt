@@ -584,21 +584,18 @@ private fun BoxScope.FilmstripOverlay(title: String, sub: String, posMs: Long, d
             if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.titleLarge.copy(fontSize = 16.sp, lineHeight = 20.sp), color = NakashColors.Muted)
         }
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 48.dp).padding(bottom = 22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Ltr {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
-                    Text(fmtDuration(posMs / 1000), style = MaterialTheme.typography.displayLarge.copy(fontSize = 34.sp, lineHeight = 38.sp))
-                    if (durMs > 0) {
-                        val left = (durMs - posMs).coerceAtLeast(0)
-                        Text("נותרו ${behindText(left / 60_000)} · מסתיים ב־${fmtTime(System.currentTimeMillis() / 1000 + left / 1000)}" + if (!playing && !scrubbing) " · מושהה" else "",
-                            style = MaterialTheme.typography.titleLarge.copy(fontSize = 17.sp), color = NakashColors.Muted)
-                    }
-                }
-            }
             if (key.isNotEmpty()) Ltr { Filmstrip(thumbs, key, posMs / 1000, durMs / 1000) }
             Ltr {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     PlayDisc(playing, discHighlighted)
-                    ProgressTrack(Modifier.weight(1f), if (durMs > 0) posMs.toFloat() / durMs else 0f, if (durMs > 0) bufferedMs.toFloat() / durMs else 0f, scrubbing)
+                    // Elapsed under the start of the line, time left under its end.
+                    Column(Modifier.weight(1f).padding(top = 18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        ProgressTrack(Modifier.fillMaxWidth(), if (durMs > 0) posMs.toFloat() / durMs else 0f, if (durMs > 0) bufferedMs.toFloat() / durMs else 0f, true)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(fmtDuration(posMs / 1000), style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp), color = Color.White.copy(alpha = .8f))
+                            if (durMs > 0) Text("-" + fmtDuration((durMs - posMs).coerceAtLeast(0) / 1000), style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp), color = Color.White.copy(alpha = .8f))
+                        }
+                    }
                 }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

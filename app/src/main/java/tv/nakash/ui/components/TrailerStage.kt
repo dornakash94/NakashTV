@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,29 +38,117 @@ data class TrailerTarget(val key: String, val bounds: Rect, val cornerDp: Float 
  * rings stay drawn on top. Moving to another title swaps the video in the same player (no reload), which is what
  * keeps focus changes smooth on a TV.
  */
-@SuppressLint("SetJavaScriptEnabled")
+/**
+ * The app's single YouTube player. A second WebView running the IFrame API never became ready after the first one
+ * existed, so every screen borrows this one: it is moved between screens, never destroyed, and stays warm.
+ */
+@SuppressLint("SetJavaScriptEnabled", "StaticFieldLeak")
+object TrailerPlayer {
+    private var web: WebView? = null
+    private var pageReady = false
+    private var pending: String? = null
+    val ready = kotlinx.coroutines.flow.MutableStateFlow(true)
+    val playing = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    private const val REFERER = "https://github.com/dornakash94/NakashTV"
+    private fun embed(key: String) = "https://www.youtube.com/embed/$key?autoplay=1&controls=0&playsinline=1&rel=0&iv_load_policy=3&fs=0&disablekb=1&modestbranding=1&cc_load_policy=0&start=4&enablejsapi=1"
+
+    fun view(ctx: android.content.Context): WebView = web ?: WebView(ctx.applicationContext).apply {
+        val main = Handler(Looper.getMainLooper())
+        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        setBackgroundColor(Color.BLACK)
+        isFocusable = false; isFocusableInTouchMode = false; descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        settings.javaScriptEnabled = true; settings.mediaPlaybackRequiresUserGesture = false; settings.domStorageEnabled = true
+        webChromeClient = WebChromeClient()
+        webViewClient = object : android.webkit.WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String?) {
+                if (url?.contains("youtube.com/embed/") != true) return
+                pageReady = true
+                view.evaluateJavascript(HOOK, null)
+                pending?.let { k -> pending = null; load(k) }
+            }
+        }
+        addJavascriptInterface(object {
+            @JavascriptInterface fun playing(id: String) { main.post { playing.value = id } }
+            @JavascriptInterface fun stopped() { main.post { playing.value = null } }
+        }, "Android")
+        web = this
+    }
+
+    /** First trailer loads the embed page; later ones swap the video inside the same page (no reload). */
+    fun load(key: String) {
+        val w = web ?: return
+        playing.value = null
+        if (!pageReady) {
+            if (w.url == null || pending == null) w.loadUrl(embed(key), mapOf("Referer" to REFERER))
+            pending = null
+            return
+        }
+        w.evaluateJavascript("(function(){var p=document.getElementById('movie_player');if(p&&p.loadVideoById){window.__want='$key';p.loadVideoById({videoId:'$key',startSeconds:4});return 1}return 0})()") { r ->
+            if (r != "1") { pageReady = false; w.loadUrl(embed(key), mapOf("Referer" to REFERER)) }
+        }
+    }
+    fun pause() { playing.value = null; web?.evaluateJavascript("try{document.getElementById('movie_player').pauseVideo()}catch(e){}", null) }
+
+    /**
+     * Injected into YouTube's own embed page: hides the player's overlays (title bar, pause/play bezel, controls,
+     * spinner, end screen) so nothing but the picture shows, and reports playback the moment the video really runs.
+     */
+    private val HOOK = """
+(function(){
+  if(window.__nk)return;window.__nk=1;
+  var css=document.createElement('style');
+  css.textContent='html,body{background:#000!important}'+
+   '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-bezel,.ytp-bezel-text-wrapper,'+
+   '.ytp-pause-overlay,.ytp-large-play-button,.ytp-spinner,.ytp-cued-thumbnail-overlay,.ytp-ce-element,.ytp-endscreen-content,'+
+   '.ytp-show-cards-title,.ytp-paid-content-overlay,.ytp-watermark,.ytp-impression-link,.ytp-youtube-button,.ytp-title,'+
+   '.ytPlayerControlsContainerHost,.ytmCustomControlHost,.ytmWatchPlayerControlsHost,.ytmCuedOverlayHost,.ytmVideoCoverHost,.ytp-unmute,.player-controls-content,.player-controls-background-container,.ytwPlayerTopControlsHost,.ytwPlayerMiddleControlsHost,.ytwPlayerBottomControlsHost,.ytmVideoInfoHost,.ytwPlayerSeekOverlayHost,.ytwPlayerUserEduTooltipHost,.ytp-popup{display:none!important;opacity:0!important}'+
+   '.ytp-caption-window-container .ytp-caption-window-rollup{display:none!important;opacity:0!important}'+
+   '.html5-video-player{background:#000!important}';
+  var shown='',lastT=-1;
+  function caps(p){try{var t=p.getOption('captions','tracklist')||[];
+    var he=t.filter(function(x){var c=(x.languageCode||'');var v=(x.vss_id||x.vssId||'');
+      return (c=='he'||c=='iw')&&v.charAt(0)=='.'&&x.kind!='asr'&&!x.translationLanguage;})[0];
+    if(he){p.setOption('captions','track',{languageCode:he.languageCode});}else{p.unloadModule('captions');p.unloadModule('cc');}}catch(e){}}
+  var HIDE='.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-bezel,.ytp-bezel-text-wrapper,.ytp-pause-overlay,.ytp-large-play-button,.ytp-spinner,.ytp-cued-thumbnail-overlay,.ytp-ce-element,.ytp-endscreen-content,.ytp-show-cards-title,.ytp-paid-content-overlay,.ytp-watermark,.ytp-impression-link,.ytp-youtube-button,.ytp-title,.ytp-overflow-button,.ytp-share-button,.ytPlayerControlsContainerHost,.ytmCustomControlHost,.ytmWatchPlayerControlsHost,.ytmCuedOverlayHost,.ytmVideoCoverHost,.ytp-unmute,.player-controls-content,.player-controls-background-container,.ytwPlayerTopControlsHost,.ytwPlayerMiddleControlsHost,.ytwPlayerBottomControlsHost,.ytmVideoInfoHost,.ytwPlayerSeekOverlayHost,.ytwPlayerUserEduTooltipHost,.ytp-popup';
+  function hide(){try{if(!document.getElementById('nkcss')&&document.head){css.id='nkcss';document.head.appendChild(css);}
+    var n=document.querySelectorAll(HIDE);for(var i=0;i<n.length;i++){n[i].style.setProperty('display','none','important');n[i].style.setProperty('opacity','0','important');}}catch(e){}}
+  new MutationObserver(hide).observe(document.documentElement,{childList:true,subtree:true});
+  setInterval(function(){try{
+    hide();
+    var p=document.getElementById('movie_player'),v=document.querySelector('video');if(!p||!v)return;
+    if(p.unMute){p.unMute();p.setVolume(55);}
+    var id=(p.getVideoData&&p.getVideoData().video_id)||'';
+    var t=v.currentTime,d=v.duration||0;
+    if(t<8)caps(p);
+    var moving=!v.paused&&t>lastT+0.05;lastT=t;
+    var ok=moving&&t>0.4&&(!d||d-t>3);
+    if(ok&&shown!=id){shown=id;Android.playing(id);}
+    if(!ok&&shown&&(v.paused||(d&&d-t<=3))){shown='';Android.stopped();}
+    if(d&&d-t<=1.2&&!v.paused){v.pause();}
+  }catch(e){}},150);
+})();
+""".trimIndent()
+}
+
 @Composable
 fun TrailerStage(target: TrailerTarget?, modifier: Modifier = Modifier, onPlaying: (String?) -> Unit) {
-    val main = remember { Handler(Looper.getMainLooper()) }
-    var view by remember { mutableStateOf<WebView?>(null) }
-    var ready by remember { mutableStateOf(false) }
-    var playing by remember { mutableStateOf<String?>(null) }
-    var firstKey by remember { mutableStateOf<String?>(null) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val web = remember { TrailerPlayer.view(ctx) }
+    val ready by TrailerPlayer.ready.collectAsState()
+    val playing by TrailerPlayer.playing.collectAsState()
     var lastBounds by remember { mutableStateOf(Rect.Zero) }
     var lastCorner by remember { mutableStateOf(10f) }
     if (target != null) { lastBounds = target.bounds; lastCorner = target.cornerDp }
-    val alpha by animateFloatAsState(if (target != null && playing == target.key) 1f else 0f, tween(if (target != null) 400 else 120), label = "stage")
-
+    val mine = target != null && playing == target.key
+    val alpha by animateFloatAsState(if (mine) 1f else 0f, tween(if (target != null) 400 else 120), label = "stage")
+    LaunchedEffect(mine, playing) { onPlaying(if (mine) playing else null) }
     LaunchedEffect(target?.key, ready) {
-        playing = null; onPlaying(null)
-        val v = view ?: return@LaunchedEffect
         if (!ready) return@LaunchedEffect
-        if (target == null) v.evaluateJavascript("try{player.pauseVideo()}catch(e){}", null)
-        else v.evaluateJavascript("try{player.loadVideoById({videoId:'${target.key}'});player.unMute();player.setVolume(55)}catch(e){}", null)
+        if (target == null) TrailerPlayer.pause() else TrailerPlayer.load(target.key)
     }
+    DisposableEffect(Unit) { onDispose { TrailerPlayer.pause() } }
 
     val b = lastBounds
-    // The video is 16:9; to fill any card shape it is enlarged to cover the rectangle and clipped to the card's corners.
     var coverW: Float; var coverH: Float
     if (b.width / b.height.coerceAtLeast(1f) > 16f / 9f) { coverW = b.width; coverH = b.width * 9f / 16f } else { coverH = b.height; coverW = b.height * 16f / 9f }
     // Enlarged from the centre so YouTube's title bar and control strip fall outside the clip.
@@ -75,53 +165,13 @@ fun TrailerStage(target: TrailerTarget?, modifier: Modifier = Modifier, onPlayin
                 val p = m.measure(Constraints.fixed(w, h))
                 layout(c.maxWidth, c.maxHeight) { p.place((c.maxWidth - w) / 2, (c.maxHeight - h) / 2) }
             },
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    setBackgroundColor(Color.BLACK)
-                    isFocusable = false; isFocusableInTouchMode = false; descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
-                    settings.javaScriptEnabled = true; settings.mediaPlaybackRequiresUserGesture = false; settings.domStorageEnabled = true
-                    webChromeClient = WebChromeClient()
-                    addJavascriptInterface(object {
-                        @JavascriptInterface fun ready() { main.post { ready = true } }
-                        @JavascriptInterface fun playing(id: String) { main.post { playing = id; onPlaying(id) } }
-                        @JavascriptInterface fun stopped() { main.post { playing = null; onPlaying(null) } }
-                    }, "Android")
-                    loadDataWithBaseURL("https://github.com/dornakash94/NakashTV", html(), "text/html", "utf-8", null)
-                    view = this
-                }
-            },
-            onRelease = { it.stopLoading(); it.loadUrl("about:blank"); it.destroy(); view = null },
+            // Borrow the one player: each screen has its own frame and moves the player into it. On leaving, a screen
+            // lets go only if the player is still in its own frame (the next screen may already have taken it).
+            factory = { c -> android.widget.FrameLayout(c).apply { (web.parent as? ViewGroup)?.removeView(web); addView(web) } },
+            onRelease = { frame -> if (web.parent === frame) frame.removeView(web) },
         )
     }
 }
 
-private const val Zoom = 1.30f
+private const val Zoom = 1.24f
 
-private fun html() = """
-<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden}
-/* The page is exactly the player's 16:9 box; the app enlarges and centres it (see TrailerStage). */
-#w{position:absolute;left:0;top:0;width:100%;height:100%}#p{width:100%;height:100%}</style></head>
-<body><div id="w"><div id="p"></div></div><script src="https://www.youtube.com/iframe_api"></script><script>
-var player,shown=false,shownId='';
-/* Captions: only a caption track uploaded in Hebrew by the channel. Never YouTube's automatic or auto-translated ones. */
-function captions(){try{var t=player.getOption('captions','tracklist')||[];
-  var he=t.filter(function(x){var c=(x.languageCode||'');var v=(x.vss_id||x.vssId||'');
-    return (c=='he'||c=='iw')&&v.charAt(0)=='.'&&x.kind!='asr'&&!x.translationLanguage;})[0];
-  if(he){player.setOption('captions','track',{languageCode:he.languageCode});}
-  else{player.setOption('captions','track',{});player.unloadModule('captions');player.unloadModule('cc');}}catch(e){}}
-/* Visible only while it really plays, from 3.5 s in and until 3 s before the end: YouTube draws its title, pause
-   icon and end screen exactly at the start and the end. */
-setInterval(function(){try{if(!player||!player.getPlayerState)return;
-  var st=player.getPlayerState(),t=player.getCurrentTime(),d=player.getDuration(),id=(player.getVideoData()||{}).video_id||'';
-  if(t<6)captions();
-  var ok=st==1&&t>=3.6&&(d<=0||d-t>3);
-  if(ok&&(!shown||shownId!=id)){shown=true;shownId=id;Android.playing(id);}
-  if(!ok&&shown){shown=false;Android.stopped();}
-  if(d>0&&d-t<=1.2&&st==1){player.pauseVideo();}}catch(e){}},200);
-function onYouTubeIframeAPIReady(){player=new YT.Player('p',{width:'100%',height:'100%',
-  playerVars:{autoplay:1,cc_load_policy:0,controls:0,rel:0,playsinline:1,iv_load_policy:3,disablekb:1,fs:0,modestbranding:1,origin:'https://github.com'},
-  events:{onReady:function(e){e.target.unMute();e.target.setVolume(55);Android.ready();},onApiChange:captions,
-    onError:function(e){shown=false;Android.stopped();}}});}
-</script></body></html>""".trimIndent()

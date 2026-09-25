@@ -122,10 +122,10 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
                 }
                 is MovieEntity -> tv.nakash.ui.components.RowCard("m${item.id}", tv.nakash.ui.components.CardKind.POSTER, item.title, item.poster, item.backdrop,
                     listOfNotNull(item.year?.toString(), item.genres.split(',').firstOrNull()?.takeIf { it.isNotBlank() }).joinToString("  ·  "), item.plot,
-                    trailer = { vm.tmdb.movie(item.tmdbId, item.title, item.year)?.trailerKey }, onFocus = { vm.onFocus(item) }, onClick = { nav.navigate("movie/${item.id}") })
+                    extras = { vm.tmdb.movie(item.tmdbId, item.title, item.year) }, onFocus = { vm.onFocus(item) }, onClick = { nav.navigate("movie/${item.id}") })
                 is SeriesEntity -> tv.nakash.ui.components.RowCard("s${item.id}", tv.nakash.ui.components.CardKind.POSTER, item.title, item.cover, item.backdrop,
                     listOfNotNull(item.year?.toString(), item.genres.split(',').firstOrNull()?.takeIf { it.isNotBlank() }).joinToString("  ·  "), item.plot,
-                    trailer = { vm.tmdb.tv(item.title, item.year)?.trailerKey }, onFocus = { vm.onFocus(item) }, onClick = { nav.navigate("seriesDetail/${item.id}") })
+                    extras = { vm.tmdb.tv(item.title, item.year) }, onFocus = { vm.onFocus(item) }, onClick = { nav.navigate("seriesDetail/${item.id}") })
                 is ContinueItem -> {
                     val p = item.progress
                     tv.nakash.ui.components.RowCard("w${p.key}", tv.nakash.ui.components.CardKind.WIDE, item.title, wide = item.image,

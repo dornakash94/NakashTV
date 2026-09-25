@@ -163,19 +163,25 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     // Billboard: one of the 10 newest, picked once per visit.
     val seed = rememberSaveable(kind) { (0..9).random() }
     val billboard = titles.take(10).let { it.getOrNull(seed % it.size.coerceAtLeast(1)) }
-    val billboardColor by produceState(Color(0xFF1B1D22), billboard?.backdrop ?: billboard?.image) { value = dominantColor(ctx, billboard?.backdrop ?: billboard?.image) ?: value }
-    val pageTint by animateColorAsState(billboardColor, tween(700), label = "tint")
 
     // ---- trailers: TMDB key → YouTube key, cached per title ----
-    val trailerKeys = remember(kind) { mutableStateMapOf<Int, String?>() }
-    suspend fun trailerFor(t: ShelfTitle): String? {
+    // One TMDB lookup per title gives its trailer and a sharp wide image (the provider's are small, and its movie
+    // list has no wide image at all).
+    val extras = remember(kind) { mutableStateMapOf<Int, tv.nakash.domain.TmdbDetails?>() }
+    suspend fun extrasFor(t: ShelfTitle): tv.nakash.domain.TmdbDetails? {
         if (tmdbKey == null) return null
-        if (trailerKeys.containsKey(t.id)) return trailerKeys[t.id]
+        if (extras.containsKey(t.id)) return extras[t.id]
         val d = runCatching { if (seriesMode) vm.tmdb.tv(t.title, t.year) else vm.tmdb.movie(t.tmdbId, t.title, t.year) }.getOrNull()
-        trailerKeys[t.id] = d?.trailerKey
-        if (tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashTrailer", "id=${t.id} tmdb=${d != null} trailer=${d?.trailerKey != null}")
-        return d?.trailerKey
+        extras[t.id] = d
+        return d
     }
+    suspend fun trailerFor(t: ShelfTitle): String? = extrasFor(t)?.trailerKey
+    fun wideOf(t: ShelfTitle): String? = extras[t.id]?.backdrop ?: t.backdrop
+    fun bigOf(t: ShelfTitle): String? = extras[t.id]?.backdrop?.replace("/w1280/", "/original/") ?: t.backdrop ?: t.image
+    LaunchedEffect(billboard?.id, tmdbKey) { billboard?.let { extrasFor(it) } }
+    val billboardImage = billboard?.let { bigOf(it) }
+    val billboardColor by produceState(Color(0xFF1B1D22), billboardImage) { value = dominantColor(ctx, billboardImage) ?: value }
+    val pageTint by animateColorAsState(billboardColor, tween(700), label = "tint")
     var stageOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     var billboardBounds by remember { mutableStateOf<Rect?>(null) }
     var cardBounds by remember { mutableStateOf<Rect?>(null) }
@@ -186,7 +192,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
         wantKey = null
         if (selectedCategory != null) return@LaunchedEffect
         if (billboardFocused) { val b = billboard ?: return@LaunchedEffect; delay(3_000); trailerFor(b)?.let { wantKey = it to true } }
-        else { val t = titles.firstOrNull { it.id == focusedId } ?: return@LaunchedEffect; delay(900); trailerFor(t)?.let { wantKey = it to false } }
+        else { val t = titles.firstOrNull { it.id == focusedId } ?: return@LaunchedEffect; delay(350); trailerFor(t)?.let { wantKey = it to false } }
     }
     target = wantKey?.let { (k, onBillboard) -> (if (onBillboard) billboardBounds else cardBounds)?.let { TrailerTarget(k, it.translate(-stageOrigin), if (onBillboard) 22f else 10f) } }
     val billboardPlaying = target != null && wantKey?.second == true && playingKey == target?.key
@@ -206,8 +212,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
         (listOfNotNull(billboard) + (shelves.getOrNull(i)?.items.orEmpty()) + (shelves.getOrNull(i + 1)?.items.orEmpty().take(6))).forEach { trailerFor(it) }
     }
     LaunchedEffect(focusedShelf, shelves) {
-        shelves.firstOrNull { it.key == focusedShelf }?.items?.forEach { prefetch(ctx, it.backdrop) }
-        billboard?.let { prefetch(ctx, it.backdrop) }
+        shelves.firstOrNull { it.key == focusedShelf }?.items?.forEach { prefetch(ctx, wideOf(it)) }
     }
     val manualScroll = remember { object : BringIntoViewSpec { override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float) = 0f } }
     val playFocus = remember { FocusRequester() }
@@ -262,7 +267,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item(key = "billboard") {
                         billboard?.let { b ->
-                            Billboard(b, seriesMode, billboardH, billboardPlaying, playFocus,
+                            Billboard(b.copy(backdrop = bigOf(b)), seriesMode, billboardH, billboardPlaying, playFocus,
                                 onBounds = { billboardBounds = it },
                                 onFocus = { billboardFocused = true; focusedId = null; focusedShelf = null },
                                 play = { playNow(b) }, info = { open(b) })
@@ -297,7 +302,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                                     rowItemsIndexed(shelf.items, key = { _, it -> it.id }) { i, item ->
                                         val expanded = rowFocused && focusedId == item.id
                                         Box(if (i == 0) Modifier.focusRequester(rowFirst) else Modifier) {
-                                        ExpandingCard(item, expanded, playingHere = expanded && cardPlaying,
+                                        ExpandingCard(item.copy(backdrop = wideOf(item)), expanded, playingHere = expanded && cardPlaying,
                                             onBounds = { if (expanded) cardBounds = it },
                                             onFocus = { billboardFocused = false; focusedShelf = shelf.key; focusedId = item.id },
                                             click = { open(item) })
