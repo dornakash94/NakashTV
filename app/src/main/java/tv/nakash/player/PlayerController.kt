@@ -115,7 +115,8 @@ class PlayerController @Inject constructor(
     // ---------- public API ----------
     fun play(req: PlayRequest) {
         _ended.value=0L
-        preview.stop(); saveNow(); stopProgress(); stallJob?.cancel(); playJob?.cancel(); m3u8Failures = 0
+        // One video at a time: the card preview and the trailer web renderer give their decoders and memory back.
+        preview.stop(); tv.nakash.ui.components.TrailerPlayer.release(); saveNow(); stopProgress(); stallJob?.cancel(); playJob?.cancel(); m3u8Failures = 0
         playJob = scope.launch {
             when (req) {
                 is PlayRequest.Live -> {

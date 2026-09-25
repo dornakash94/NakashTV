@@ -34,6 +34,22 @@ class MainActivity : ComponentActivity() {
         }
         return super.dispatchKeyEvent(event)
     }
+    /** Leaving the app (home button, another input): free the trailer renderer and decoded images. */
+    override fun onStop() {
+        super.onStop()
+        tv.nakash.ui.components.TrailerPlayer.release()
+        coil3.SingletonImageLoader.get(this).memoryCache?.clear()
+    }
+
+    /** TVs run with little memory: give back the heaviest things before the system has to kill the app. */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            tv.nakash.ui.components.TrailerPlayer.release()
+            coil3.SingletonImageLoader.get(this).memoryCache?.clear()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)

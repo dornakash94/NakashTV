@@ -39,3 +39,7 @@ Key: put `tmdb.apiKey=<API Key>` in local.properties on the build machine (git-i
 ## Release 0.3.0-beta.1 (2026-09-25)
 
 Netflix-style browse (billboard with trailer on Movies/Series; rows with widening cards and in-card trailers on Home, Movies, Series; channel cards with in-card live preview on Home and Live), Netflix-style detail page with full-screen trailer and a "כותרים דומים" panel, continuous catch-up, program-ribbon player, TMDB extras, pre-built search index. Published by replacing the v0.1.0-beta.1/NakashTV.apk asset (Downloader code 4033247) and tagged v0.3.0-beta.1 as an archive.
+
+## Release 0.3.0-beta.3 (2026-09-25)
+
+Stability on low-memory TVs. The trailer WebView's renderer (~100-150 MB, plus a video decoder) could be reclaimed by the system under memory pressure, and with no `onRenderProcessGone` handler Android killed the whole app (reported as the app getting slow and then crashing). Both WebViews now handle a lost renderer. The shared trailer WebView is created only when a trailer is wanted, and it is released when real playback starts, when the app is stopped, and on `onTrimMemory(RUNNING_LOW)`. The Coil memory cache is capped at 15 % and cleared on the same events. The player's "טוענים שידור…" text is replaced by a spinner. The remote's channel rocker (CH+/CH−) zaps inside a channel, also with the menu open or during catch-up. Zapping to a channel with another aspect ratio no longer leaves the new picture in a corner over the old frame: the hosted video view is laid out again whenever the video size changes.

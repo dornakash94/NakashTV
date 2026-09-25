@@ -54,10 +54,17 @@ fun YouTubeTrailer(videoKey: String, muted: Boolean, modifier: Modifier = Modifi
             settings.mediaPlaybackRequiresUserGesture = false
             settings.domStorageEnabled = true
             webChromeClient = WebChromeClient()
+            // If the system reclaims the web renderer (low memory on the TV), end the trailer instead of the whole app.
+            webViewClient = object : android.webkit.WebViewClient() {
+                override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                    if (handle?.view === view) handle.view = null
+                    main.post(onError); return true
+                }
+            }
             addJavascriptInterface(bridge, "Android")
             // YouTube requires an identifying referrer for embeds; the app's public repository page serves as its origin.
             loadDataWithBaseURL("https://github.com/dornakash94/NakashTV", html, "text/html", "utf-8", null)
             handle?.view = this
         }
-    }, onRelease = { it.stopLoading(); it.loadUrl("about:blank"); it.destroy() })
+    }, onRelease = { runCatching { it.stopLoading(); it.loadUrl("about:blank"); it.destroy() } })
 }

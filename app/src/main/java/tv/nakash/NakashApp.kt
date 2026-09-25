@@ -26,6 +26,8 @@ class NakashApp : Application(), Configuration.Provider, SingletonImageLoader.Fa
     /** Posters/logos go through the same OkHttp (fixed User-Agent), 512 MB disk cache. */
     override fun newImageLoader(context: PlatformContext): ImageLoader = ImageLoader.Builder(context)
         .components { add(OkHttpNetworkFetcherFactory(callFactory = { okHttp })) }
+        // Decoded images in RAM stay modest: TVs give an app far less memory than phones.
+        .memoryCache { coil3.memory.MemoryCache.Builder().maxSizePercent(context, 0.15).build() }
         .diskCache { DiskCache.Builder().directory(cacheDir.resolve("images")).maxSizeBytes(512L * 1024 * 1024).build() }
         .crossfade(200).build()
 }

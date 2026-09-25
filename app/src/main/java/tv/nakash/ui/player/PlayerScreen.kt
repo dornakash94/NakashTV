@@ -57,6 +57,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -324,6 +325,15 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
                 val k = e.key
                 if(k==Key.Back) return@onPreviewKeyEvent false
                 if(k==Key.Escape) { back();return@onPreviewKeyEvent true }
+                // The remote's channel rocker (CH+/CH−) zaps from anywhere in a channel, even with the menu open or
+                // during catch-up (it goes to the neighbour channel live).
+                val chDir=when(e.nativeKeyEvent.keyCode) { android.view.KeyEvent.KEYCODE_CHANNEL_UP -> +1; android.view.KeyEvent.KEYCODE_CHANNEL_DOWN -> -1; else -> 0 }
+                if(chDir!=0) {
+                    val ch=live?.channel ?: archive?.channel ?: return@onPreviewKeyEvent true
+                    scrubEpoch=null;showMini=false
+                    vm.zap(ch,chDir)
+                    return@onPreviewKeyEvent true
+                }
                 if(!playerFocused) return@onPreviewKeyEvent false
                 if(showPrograms) {
                     val ch=channel
@@ -398,9 +408,9 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
                 }
             }.focusRequester(focus).onFocusChanged { playerFocused=it.isFocused }.focusable(),
     ) {
-        AndroidView(factory = { ctx -> PlayerView(ctx).apply { useController = false; keepScreenOn = true; isFocusable = false; descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS; player = vm.controller.player;videoView=this } }, modifier = Modifier.fillMaxSize(),update={it.resizeMode=controls.aspectMode},onRelease={it.player=null})
+        AndroidView(factory = { ctx -> RelayoutFrame(ctx,vm.controller.player).apply { addView(PlayerView(ctx).apply { useController = false; keepScreenOn = true; isFocusable = false; descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS; player = vm.controller.player;videoView=this }) } }, modifier = Modifier.fillMaxSize(),update={(it.getChildAt(0) as PlayerView).resizeMode=controls.aspectMode},onRelease={(it.getChildAt(0) as PlayerView).player=null;it.detach()})
 
-        if(st.isBuffering) Text("טוענים שידור…", modifier=Modifier.align(Alignment.Center).background(NakashColors.Bg).padding(20.dp))
+        if(st.isBuffering) BufferingSpinner(Modifier.align(Alignment.Center))
         if(nearEnd && nextEpisode!=null) Text("הפרק הבא: ${nextEpisode!!.title} · ▲ לצפייה", color=NakashColors.Accent, modifier=Modifier.align(Alignment.TopCenter).background(NakashColors.Bg).padding(20.dp))
         if(stillWatching) Dialog(onDismissRequest={stillWatching=false}) { Surface { Column(Modifier.padding(24.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
             Text("עדיין צופים?")
@@ -783,4 +793,51 @@ private fun SubtitlePopover(controller:PlayerController,close:()->Unit) {
             if(tracks.isEmpty()) item {Text("אין רצועת כתוביות נפרדת. כתוביות שמוטמעות בתמונה אינן ניתנות לכיבוי.",color=NakashColors.Muted,style=MaterialTheme.typography.bodySmall.copy(fontSize=12.sp),modifier=Modifier.padding(6.dp))}
         }
     }
+}
+
+
+/** A spinning arc over the picture while the stream loads: growing and shrinking arc, no box behind it. */
+@Composable
+private fun BufferingSpinner(modifier: Modifier = Modifier) {
+    val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "buffer")
+    val turn by t.animateFloat(0f, 360f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1000, easing = androidx.compose.animation.core.LinearEasing)), label = "turn")
+    val sweep by t.animateFloat(40f, 250f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(800, easing = androidx.compose.animation.core.FastOutSlowInEasing), androidx.compose.animation.core.RepeatMode.Reverse), label = "sweep")
+    androidx.compose.foundation.Canvas(modifier.size(72.dp)) {
+        val stroke = 6.dp.toPx()
+        val inset = stroke / 2
+        val arcSize = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
+        val topLeft = androidx.compose.ui.geometry.Offset(inset, inset)
+        drawArc(Color.White.copy(alpha = .14f), 0f, 360f, false, topLeft, arcSize, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+        drawArc(
+            NakashColors.Live,
+            turn, sweep, false, topLeft, arcSize,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round),
+        )
+    }
+}
+
+
+/**
+ * Hosts the video view inside Compose. When a new stream has another aspect ratio (a 4:3 channel after a 16:9 one)
+ * the player view asks for a new layout, which Compose does not run for a view it hosts: the picture was left at
+ * its new size in the corner over the old frame. Lay the children out again right away instead.
+ */
+private class RelayoutFrame(ctx: android.content.Context, private val player: androidx.media3.common.Player) : android.widget.FrameLayout(ctx) {
+    private val relayout = Runnable {
+        if (width == 0 || height == 0) return@Runnable
+        forceAll(this)
+        measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY))
+        layout(left, top, right, bottom)
+        invalidate()
+    }
+    // A pending request stops travelling up once a parent is already marked, so it may never reach this frame:
+    // react to the stream's own size change as well, and mark the whole subtree so the measure cache is bypassed.
+    private val listener = object : androidx.media3.common.Player.Listener {
+        override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) { post(relayout) }
+        override fun onRenderedFirstFrame() { post(relayout) }
+    }
+    init { player.addListener(listener) }
+    fun detach() { player.removeListener(listener); removeCallbacks(relayout) }
+    private fun forceAll(v: android.view.View) { v.forceLayout(); if (v is android.view.ViewGroup) for (i in 0 until v.childCount) forceAll(v.getChildAt(i)) }
+    override fun requestLayout() { super.requestLayout(); post(relayout) }
 }

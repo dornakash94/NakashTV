@@ -49,6 +49,11 @@ object TrailerPlayer {
     private var pending: String? = null
     val ready = kotlinx.coroutines.flow.MutableStateFlow(true)
     val playing = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    /** Bumped whenever the WebView is thrown away, so stages take the new one. */
+    val generation = kotlinx.coroutines.flow.MutableStateFlow(0)
+    /** The trailer that was showing when the player was released: not rebuilt for it (the screen under a starting movie). */
+    internal var releasedKey: String? = null
+    private var currentKey: String? = null
     private const val REFERER = "https://github.com/dornakash94/NakashTV"
     private fun embed(key: String) = "https://www.youtube.com/embed/$key?autoplay=1&controls=0&playsinline=1&rel=0&iv_load_policy=3&fs=0&disablekb=1&modestbranding=1&cc_load_policy=0&start=4&enablejsapi=1"
 
@@ -66,6 +71,13 @@ object TrailerPlayer {
                 view.evaluateJavascript(HOOK, null)
                 pending?.let { k -> pending = null; load(k) }
             }
+            // The web renderer is a separate process the TV may reclaim under memory pressure. Without this the
+            // system takes the whole app down with it; instead drop the WebView and build a fresh one on demand.
+            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                if (tv.nakash.BuildConfig.DEBUG) android.util.Log.w("NakashTrailer", "renderer gone crash=${detail?.didCrash()}")
+                if (web === view) release()
+                return true
+            }
         }
         addJavascriptInterface(object {
             @JavascriptInterface fun playing(id: String) { main.post { playing.value = id } }
@@ -77,6 +89,7 @@ object TrailerPlayer {
     /** First trailer loads the embed page; later ones swap the video inside the same page (no reload). */
     fun load(key: String) {
         val w = web ?: return
+        currentKey = key; releasedKey = null
         playing.value = null
         if (!pageReady) {
             if (w.url == null || pending == null) w.loadUrl(embed(key), mapOf("Referer" to REFERER))
@@ -86,6 +99,19 @@ object TrailerPlayer {
         w.evaluateJavascript("(function(){var p=document.getElementById('movie_player');if(p&&p.loadVideoById){window.__want='$key';p.loadVideoById({videoId:'$key',startSeconds:4});return 1}return 0})()") { r ->
             if (r != "1") { pageReady = false; w.loadUrl(embed(key), mapOf("Referer" to REFERER)) }
         }
+    }
+    /**
+     * Frees the WebView and its renderer process (~100-150 MB, plus a video decoder). Called when real playback
+     * starts, when the app leaves the screen and when memory runs low; the next trailer builds a new one.
+     */
+    fun release() {
+        if (Looper.myLooper() != Looper.getMainLooper()) { Handler(Looper.getMainLooper()).post { release() }; return }
+        val w = web ?: return
+        if (tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashTrailer", "release webview")
+        releasedKey = currentKey; currentKey = null
+        web = null; pageReady = false; pending = null; playing.value = null
+        runCatching { (w.parent as? ViewGroup)?.removeView(w); w.stopLoading(); w.loadUrl("about:blank"); w.destroy() }
+        generation.value++
     }
     fun pause() { playing.value = null; web?.evaluateJavascript("try{document.getElementById('movie_player').pauseVideo()}catch(e){}", null) }
 
@@ -133,7 +159,12 @@ object TrailerPlayer {
 @Composable
 fun TrailerStage(target: TrailerTarget?, modifier: Modifier = Modifier, onPlaying: (String?) -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val web = remember { TrailerPlayer.view(ctx) }
+    val gen by TrailerPlayer.generation.collectAsState()
+    // Built only once a trailer is actually wanted: the web renderer costs ~130 MB, so pages without trailers
+    // (channels) and pages after a memory release don't pay for it.
+    var wanted by remember(gen) { mutableStateOf(false) }
+    if (target != null && target.key != TrailerPlayer.releasedKey) wanted = true
+    val web = if (wanted) remember(gen) { TrailerPlayer.view(ctx) } else null
     val ready by TrailerPlayer.ready.collectAsState()
     val playing by TrailerPlayer.playing.collectAsState()
     var lastBounds by remember { mutableStateOf(Rect.Zero) }
@@ -142,8 +173,8 @@ fun TrailerStage(target: TrailerTarget?, modifier: Modifier = Modifier, onPlayin
     val mine = target != null && playing == target.key
     val alpha by animateFloatAsState(if (mine) 1f else 0f, tween(if (target != null) 400 else 120), label = "stage")
     LaunchedEffect(mine, playing) { onPlaying(if (mine) playing else null) }
-    LaunchedEffect(target?.key, ready) {
-        if (!ready) return@LaunchedEffect
+    LaunchedEffect(target?.key, ready, gen) {
+        if (!ready || web == null) return@LaunchedEffect
         if (target == null) TrailerPlayer.pause() else TrailerPlayer.load(target.key)
     }
     DisposableEffect(Unit) { onDispose { TrailerPlayer.pause() } }
@@ -159,7 +190,7 @@ fun TrailerStage(target: TrailerTarget?, modifier: Modifier = Modifier, onPlayin
         val p = m.measure(Constraints.fixed(w, h))
         layout(c.maxWidth, c.maxHeight) { p.place(b.left.roundToInt(), b.top.roundToInt()) }
     }.graphicsLayer { this.alpha = alpha; clip = true; shape = androidx.compose.foundation.shape.RoundedCornerShape(lastCorner.dp) }) {
-        AndroidView(
+        if (web != null) androidx.compose.runtime.key(gen) { AndroidView(
             modifier = Modifier.layout { m, c ->
                 val w = coverW.roundToInt().coerceAtLeast(1); val h = coverH.roundToInt().coerceAtLeast(1)
                 val p = m.measure(Constraints.fixed(w, h))
@@ -169,7 +200,7 @@ fun TrailerStage(target: TrailerTarget?, modifier: Modifier = Modifier, onPlayin
             // lets go only if the player is still in its own frame (the next screen may already have taken it).
             factory = { c -> android.widget.FrameLayout(c).apply { (web.parent as? ViewGroup)?.removeView(web); addView(web) } },
             onRelease = { frame -> if (web.parent === frame) frame.removeView(web) },
-        )
+        ) }
     }
 }
 
