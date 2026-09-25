@@ -15,6 +15,7 @@ import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -180,8 +181,8 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     fun bigOf(t: ShelfTitle): String? = extras[t.id]?.backdrop?.replace("/w1280/", "/original/") ?: t.backdrop ?: t.image
     LaunchedEffect(billboard?.id, tmdbKey) { billboard?.let { extrasFor(it) } }
     val billboardImage = billboard?.let { bigOf(it) }
-    val billboardColor by produceState(Color(0xFF1B1D22), billboardImage) { value = dominantColor(ctx, billboardImage) ?: value }
-    val pageTint by animateColorAsState(billboardColor, tween(700), label = "tint")
+    val billboardColor by produceState(Color(0xFF1B1D22), billboardImage) { value = tv.nakash.ui.components.dominantColor(ctx, billboardImage) ?: value }
+    val pageTint = billboardColor
     var stageOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     var billboardBounds by remember { mutableStateOf<Rect?>(null) }
     var cardBounds by remember { mutableStateOf<Rect?>(null) }
@@ -240,17 +241,9 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
             return@Box
         }
         // Background in the billboard's colour, fading to the app background.
-        // The tint belongs to the billboard: it fades out as you scroll and is gone (all black) by the third row.
-        val density = androidx.compose.ui.platform.LocalDensity.current
-        val fadeSpanPx = with(density) { 900.dp.toPx() }
-        val tintAlpha by remember { derivedStateOf {
-            val scrolled = if (list.firstVisibleItemIndex == 0) list.firstVisibleItemScrollOffset.toFloat() else fadeSpanPx + list.firstVisibleItemIndex
-            val rows = list.firstVisibleItemIndex
-            if (rows >= 3) 0f else (1f - scrolled / fadeSpanPx - rows * .34f).coerceIn(0f, 1f)
-        } }
-        val shownTint by animateFloatAsState(tintAlpha, tween(450), label = "tintFade")
-        Box(Modifier.fillMaxSize().background(Color.Black))
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = shownTint }.background(Brush.verticalGradient(0f to lerp(pageTint, Color.Black, .35f), .55f to lerp(pageTint, Color.Black, .75f), 1f to Color.Black)))
+        // The billboard's colour, deepening as you scroll (near black by the third row, never plain black).
+        val scrolled by tv.nakash.ui.components.rememberScrolledPx(list)
+        tv.nakash.ui.components.ScrollTintBackground(pageTint, scrolled)
         // The one trailer player, behind the content.
         Box(Modifier.fillMaxSize().onGloballyPositioned { stageOrigin = it.positionInRoot() }) {
             TrailerStage(target, onPlaying = { playingKey = it })
@@ -289,10 +282,16 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                                 val stepPx = with(density) { (PosterW + 12.dp).toPx() }
                                 // Cards before the focused one are posters: its start sits at index × step. Scrolling there on the
                                 // same curve and duration as the widen/shrink makes the whole row one continuous slide.
+                                val posterPx = with(androidx.compose.ui.platform.LocalDensity.current) { PosterW.toPx() }
+                                // One smooth move per press, on the same curve and time as the widen/shrink. The target is measured
+                                // from the screen at the moment of the press (not tracked), so quick presses can't make it drift:
+                                // the focused card ends at the row start once every card before it is back to poster size.
                                 LaunchedEffect(focusIndex) {
                                     if (focusIndex < 0) return@LaunchedEffect
-                                    val current = rowList.firstVisibleItemIndex * stepPx + rowList.firstVisibleItemScrollOffset
-                                    val delta = focusIndex * stepPx - current
+                                    var info = rowList.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusIndex }
+                                    if (info == null) { rowList.scrollToItem(focusIndex); androidx.compose.runtime.withFrameNanos { }; info = rowList.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusIndex } ?: return@LaunchedEffect }
+                                    val shrinkBefore = rowList.layoutInfo.visibleItemsInfo.filter { it.index < focusIndex }.sumOf { (it.size - posterPx).coerceAtLeast(0f).toDouble() }.toFloat()
+                                    val delta = info.offset - shrinkBefore
                                     if (kotlin.math.abs(delta) > 1f) rowList.animateScrollBy(delta, tween(CardMs, easing = androidx.compose.animation.core.FastOutSlowInEasing))
                                 }
                                 // Entering a row lands on the card you left it on, or its first card: never the card that happens to
@@ -423,14 +422,3 @@ private fun prefetch(ctx: android.content.Context, url: String?) {
     coil3.SingletonImageLoader.get(ctx).enqueue(coil3.request.ImageRequest.Builder(ctx).data(url).build())
 }
 
-/** A dark, saturated tone from the image, for the page background. */
-private suspend fun dominantColor(ctx: android.content.Context, url: String?): Color? = withContext(Dispatchers.IO) {
-    url ?: return@withContext null
-    runCatching {
-        val req = coil3.request.ImageRequest.Builder(ctx).data(url).size(160, 90).allowHardware(false).build()
-        val bmp = (coil3.SingletonImageLoader.get(ctx).execute(req) as? coil3.request.SuccessResult)?.image?.toBitmap() ?: return@runCatching null
-        val p = androidx.palette.graphics.Palette.from(bmp).generate()
-        val rgb = (p.darkVibrantSwatch ?: p.vibrantSwatch ?: p.darkMutedSwatch ?: p.dominantSwatch)?.rgb ?: return@runCatching null
-        Color(rgb)
-    }.getOrNull()
-}

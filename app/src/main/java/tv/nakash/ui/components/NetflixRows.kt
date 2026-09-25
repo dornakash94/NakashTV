@@ -8,6 +8,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -70,14 +71,14 @@ private val PosterWide = 469.dp
 private val WideW = 272.dp
 private val WideH = 153.dp
 private const val CardMs = 320
-private fun rowStep(kind: CardKind) = when (kind) { CardKind.POSTER -> PosterW; else -> WideW } + 12.dp
+private fun rowStep(@Suppress("UNUSED_PARAMETER") kind: CardKind) = PosterW + 12.dp
 
 /**
  * Rows only (no billboard): black page, list clipped under the nav bar, the focused row just below it, the focused card
  * pinned to the row start with details underneath. One shared YouTube player for trailers; channel cards show the live
  * preview inside the card.
  */
-@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun NetflixRowsPage(
     shelves: List<RowShelf>, previewPlayer: androidx.media3.common.Player?, previewHasFrame: Boolean,
@@ -113,8 +114,20 @@ fun NetflixRowsPage(
     val target = want?.let { k -> cardBounds?.let { TrailerTarget(k, it.translate(-stageOrigin), 10f) } }
     LaunchedEffect(focusedShelf) { val i = shelves.indexOfFirst { it.key == focusedShelf }; if (i >= 0) list.animateScrollToItem(i) }
 
-    Box(modifier.fillMaxSize().background(Color.Black)) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val tintSource = focused?.let { extras[it.key]?.backdrop ?: it.wide ?: it.poster ?: it.channel?.logo }
+    var tint by remember(restoreKey) { mutableStateOf(Color(0xFF1B1D22)) }
+    LaunchedEffect(tintSource) { delay(250); dominantColor(ctx, tintSource)?.let { tint = it } }
+    val scrolled by rememberScrolledPx(list)
+    Box(modifier.fillMaxSize()) {
+        ScrollTintBackground(tint, scrolled)
         Box(Modifier.fillMaxSize().onGloballyPositioned { stageOrigin = it.positionInRoot() }) { TrailerStage(target, onPlaying = { playing = it }) }
+        // Scrolling is driven only by focus changes here (rows to the top, cards to the row start), never by the
+        // system's bring-into-view, which nudged the row down on the first move across it.
+        val defaultSpec = androidx.compose.foundation.gestures.LocalBringIntoViewSpec.current
+        val noAutoScroll = remember { object : androidx.compose.foundation.gestures.BringIntoViewSpec {
+            override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float) = 0f } }
+        CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides noAutoScroll) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             LazyColumn(Modifier.fillMaxSize().padding(top = tv.nakash.ui.nav.NavBarHeight).clipToBounds().focusGroup(), state = list,
                 contentPadding = PaddingValues(top = 8.dp, bottom = maxHeight * .6f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -130,28 +143,34 @@ fun NetflixRowsPage(
                             val rowList = rememberLazyListState()
                             val focusIndex = if (rowFocused) shelf.cards.indexOfFirst { it.key == focusedCard }.let { if (it < 0) shelf.cards.size else it } else -1
                             val stepPx = with(LocalDensity.current) { rowStep(kind).toPx() }
-                            LaunchedEffect(focusIndex) {
-                                if (focusIndex < 0) return@LaunchedEffect
-                                val current = rowList.firstVisibleItemIndex * stepPx + rowList.firstVisibleItemScrollOffset
-                                val delta = focusIndex * stepPx - current
-                                if (kotlin.math.abs(delta) > 1f) rowList.animateScrollBy(delta, tween(CardMs, easing = FastOutSlowInEasing))
-                            }
+                            val posterPx = with(androidx.compose.ui.platform.LocalDensity.current) { PosterW.toPx() }
+                                // One smooth move per press, on the same curve and time as the widen/shrink. The target is measured
+                                // from the screen at the moment of the press (not tracked), so quick presses can't make it drift:
+                                // the focused card ends at the row start once every card before it is back to poster size.
+                                LaunchedEffect(focusIndex) {
+                                    if (focusIndex < 0) return@LaunchedEffect
+                                    var info = rowList.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusIndex }
+                                    if (info == null) { rowList.scrollToItem(focusIndex); androidx.compose.runtime.withFrameNanos { }; info = rowList.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusIndex } ?: return@LaunchedEffect }
+                                    val shrinkBefore = rowList.layoutInfo.visibleItemsInfo.filter { it.index < focusIndex }.sumOf { (it.size - posterPx).coerceAtLeast(0f).toDouble() }.toFloat()
+                                    val delta = info.offset - shrinkBefore
+                                    if (kotlin.math.abs(delta) > 1f) rowList.animateScrollBy(delta, tween(CardMs, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+                                }
                             val rowFirst = remember(shelf.key) { FocusRequester() }
+                            // Rows keep the platform's bring-into-view (focus search across a row relies on it); only the page list
+                            // has it disabled. Our anchoring scroll then only adds what is still missing.
+                            CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides noAutoScroll) {
                             LazyRow(modifier = Modifier.focusRestorer { rowFirst }, state = rowList, contentPadding = PaddingValues(horizontal = 40.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 itemsIndexed(shelf.cards, key = { _, c -> c.key }) { i, c ->
                                     val isFocused = rowFocused && focusedCard == c.key
                                     Box(if (i == 0) Modifier.focusRequester(rowFirst).then(if (shelfIndex == 0) Modifier.focusRequester(firstFocus) else Modifier) else Modifier) {
                                         val onF = { focusedShelf = shelf.key; focusedCard = c.key; c.onFocus() }
-                                        when (c.kind) {
-                                            CardKind.POSTER -> PosterExpandingCard(c.copy(wide = extras[c.key]?.backdrop ?: c.wide), isFocused, isFocused && playing != null && playing == target?.key, { if (isFocused) cardBounds = it }, onF)
-                                            CardKind.WIDE -> WideCard(c, onF)
-                                            CardKind.CHANNEL -> ChannelWideCard(c, isFocused, previewPlayer, isFocused && previewHasFrame, onF)
-                                        }
+                                        PosterExpandingCard(c.copy(wide = extras[c.key]?.backdrop ?: c.wide), isFocused, isFocused && playing != null && playing == target?.key,
+                                            { if (isFocused) cardBounds = it }, onF, previewPlayer, isFocused && previewHasFrame)
                                     }
                                 }
                                 shelf.onShowAll?.let { all ->
                                     item(key = "all") {
-                                        Surface(onClick = all, modifier = Modifier.width(if (kind == CardKind.POSTER) PosterW else WideW * .6f).height(if (kind == CardKind.POSTER) PosterH else WideH)
+                                        Surface(onClick = all, modifier = Modifier.width(PosterW).height(PosterH)
                                             .onFocusChanged { if (it.isFocused) { focusedShelf = shelf.key; focusedCard = null } },
                                             shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
                                             colors = ClickableSurfaceDefaults.colors(containerColor = Color.White.copy(alpha = .08f), focusedContainerColor = Color.White.copy(alpha = .18f), contentColor = Color.White, focusedContentColor = Color.White)) {
@@ -162,6 +181,7 @@ fun NetflixRowsPage(
                                         }
                                     }
                                 }
+                            }
                             }
                         }
                         Box(Modifier.padding(horizontal = 40.dp).height(if (rowFocused) 58.dp else 0.dp)) {
@@ -177,75 +197,57 @@ fun NetflixRowsPage(
                 }
             }
         }
+        }
     }
 }
 
+/**
+ * The one row card (Movies, Series, Home, Live): 2:3 at rest, widens to 16:9 when focused. Titles show their wide
+ * image (and then the trailer behind it); continue-watching shows its wide frame; a channel shows its logo at rest and
+ * its live picture when focused.
+ */
 @Composable
-private fun PosterExpandingCard(c: RowCard, expanded: Boolean, playingHere: Boolean, onBounds: (Rect) -> Unit, onFocus: () -> Unit) {
+private fun PosterExpandingCard(c: RowCard, expanded: Boolean, playingHere: Boolean, onBounds: (Rect) -> Unit, onFocus: () -> Unit,
+                                livePlayer: androidx.media3.common.Player? = null, liveFrame: Boolean = false) {
     val width by animateDpAsState(if (expanded) PosterWide else PosterW, tween(CardMs, easing = FastOutSlowInEasing), label = "w")
-    var wideOk by remember(c.wide) { mutableStateOf(false) }
+    var wideOk by remember(c.wide) { mutableStateOf(c.kind == CardKind.WIDE) }
     val hasWide = c.wide != null && c.wide != c.poster
     val wideAlpha by animateFloatAsState(if (expanded && hasWide && wideOk) 1f else 0f, tween(if (expanded) 320 else 140), label = "wide")
-    val fillAlpha by animateFloatAsState(if (expanded && !(hasWide && wideOk)) 1f else 0f, tween(260), label = "fill")
+    val fillAlpha by animateFloatAsState(if (expanded && c.kind == CardKind.POSTER && !(hasWide && wideOk)) 1f else 0f, tween(260), label = "fill")
     val imageAlpha by animateFloatAsState(if (playingHere) 0f else 1f, tween(450), label = "img")
+    val liveAlpha by animateFloatAsState(if (expanded && liveFrame) 1f else 0f, tween(400), label = "live")
     val shape = RoundedCornerShape(10.dp)
     Surface(onClick = c.onClick, onLongClick = c.onLongClick, modifier = Modifier.width(width).height(PosterH).onFocusChanged { if (it.isFocused) onFocus() }.onGloballyPositioned { onBounds(it.boundsInRoot()) },
         shape = ClickableSurfaceDefaults.shape(shape), scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = Color.Transparent),
         border = ClickableSurfaceDefaults.border(focusedBorder = androidx.tv.material3.Border(BorderStroke(3.dp, Color.White), shape = shape))) {
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = imageAlpha }.background(NakashColors.Tile), contentAlignment = Alignment.Center) {
-            if (fillAlpha > 0f) AsyncImage(c.poster, null, Modifier.fillMaxSize().graphicsLayer { alpha = fillAlpha }.blur(24.dp), contentScale = ContentScale.Crop, alpha = .55f)
-            AsyncImage(c.poster ?: c.wide, c.title, Modifier.width(PosterW).fillMaxHeight(), contentScale = ContentScale.Crop)
-            if (hasWide && (expanded || wideAlpha > 0f)) AsyncImage(c.wide, null, Modifier.fillMaxSize().graphicsLayer { alpha = wideAlpha }, contentScale = ContentScale.Crop,
-                onSuccess = { st -> val sz = st.painter.intrinsicSize; wideOk = sz.width > 0f && sz.width / sz.height >= 1.6f })
-            c.progress?.let { ProgressLine(it, Modifier.align(Alignment.BottomCenter)) }
-        }
-    }
-}
-
-/** Continue-watching style: landscape image, title and remaining time. */
-@Composable
-private fun WideCard(c: RowCard, onFocus: () -> Unit) {
-    val shape = RoundedCornerShape(10.dp)
-    Surface(onClick = c.onClick, onLongClick = c.onLongClick, modifier = Modifier.width(WideW).height(WideH).onFocusChanged { if (it.isFocused) onFocus() },
-        shape = ClickableSurfaceDefaults.shape(shape), scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
-        colors = ClickableSurfaceDefaults.colors(containerColor = NakashColors.Tile, focusedContainerColor = NakashColors.Tile),
-        border = ClickableSurfaceDefaults.border(focusedBorder = androidx.tv.material3.Border(BorderStroke(3.dp, Color.White), shape = shape))) {
-        Box(Modifier.fillMaxSize()) {
-            AsyncImage(c.wide ?: c.poster, c.title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.45f to Color.Transparent, 1f to Color.Black.copy(alpha = .88f))))
-            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(c.title, style = MaterialTheme.typography.titleLarge.copy(fontSize = 17.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                c.label?.let { Text(it, color = Color.White.copy(alpha = .8f), style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp), maxLines = 1) }
-            }
-            c.progress?.let { ProgressLine(it, Modifier.align(Alignment.BottomCenter)) }
-        }
-    }
-}
-
-/** A channel: logo and what's on; when focused, the live picture plays inside the card. */
-@Composable
-private fun ChannelWideCard(c: RowCard, focused: Boolean, player: androidx.media3.common.Player?, hasFrame: Boolean, onFocus: () -> Unit) {
-    val shape = RoundedCornerShape(10.dp)
-    val videoAlpha by animateFloatAsState(if (focused && hasFrame) 1f else 0f, tween(400), label = "live")
-    Surface(onClick = c.onClick, onLongClick = c.onLongClick, modifier = Modifier.width(WideW).height(WideH).onFocusChanged { if (it.isFocused) onFocus() },
-        shape = ClickableSurfaceDefaults.shape(shape), scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
-        colors = ClickableSurfaceDefaults.colors(containerColor = Color(0xFF16171C), focusedContainerColor = Color(0xFF1E2027)),
-        border = ClickableSurfaceDefaults.border(focusedBorder = androidx.tv.material3.Border(BorderStroke(3.dp, Color.White), shape = shape))) {
-        Box(Modifier.fillMaxSize()) {
-            val ch = c.channel
-            Box(Modifier.align(Alignment.Center).padding(bottom = 26.dp)) { if (ch != null) ChannelLogo(ch, 72, plain = true) }
-            if (focused && player != null) AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(tv.nakash.R.layout.player_preview, null, false) as PlayerView).apply {
-                useController = false; isFocusable = false; descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
-                this.player = player; resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-            } }, modifier = Modifier.fillMaxSize().graphicsLayer { alpha = videoAlpha }, onRelease = { it.player = null })
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.5f to Color.Transparent, 1f to Color.Black.copy(alpha = .9f))))
-            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(Modifier.size(7.dp).clip(CircleShape).background(NakashColors.Live))
-                    Text(c.title, style = MaterialTheme.typography.titleLarge.copy(fontSize = 16.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = imageAlpha }.background(if (c.kind == CardKind.CHANNEL) Color(0xFF17181D) else NakashColors.Tile), contentAlignment = Alignment.Center) {
+            when (c.kind) {
+                CardKind.CHANNEL -> {
+                    c.channel?.let { Box(Modifier.padding(bottom = 40.dp)) { ChannelLogo(it, 96, plain = true) } }
+                    if (expanded && livePlayer != null) AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(tv.nakash.R.layout.player_preview, null, false) as PlayerView).apply {
+                        useController = false; isFocusable = false; descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                        player = livePlayer; resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    } }, modifier = Modifier.fillMaxSize().graphicsLayer { alpha = liveAlpha }, onRelease = { it.player = null })
                 }
-                c.nowTitle?.let { Text(it, color = Color.White.copy(alpha = .78f), style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                CardKind.WIDE -> AsyncImage(c.wide ?: c.poster, c.title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                CardKind.POSTER -> {
+                    if (fillAlpha > 0f) AsyncImage(c.poster, null, Modifier.fillMaxSize().graphicsLayer { alpha = fillAlpha }.blur(24.dp), contentScale = ContentScale.Crop, alpha = .55f)
+                    AsyncImage(c.poster ?: c.wide, c.title, Modifier.width(PosterW).fillMaxHeight(), contentScale = ContentScale.Crop)
+                    if (hasWide && (expanded || wideAlpha > 0f)) AsyncImage(c.wide, null, Modifier.fillMaxSize().graphicsLayer { alpha = wideAlpha }, contentScale = ContentScale.Crop,
+                        onSuccess = { st -> val sz = st.painter.intrinsicSize; wideOk = sz.width > 0f && sz.width / sz.height >= 1.6f })
+                }
+            }
+            // Channels and continue-watching carry their name on the card (posters already show it in the art).
+            if (c.kind != CardKind.POSTER) {
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.5f to Color.Transparent, 1f to Color.Black.copy(alpha = .9f))))
+                Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (c.kind == CardKind.CHANNEL) Box(Modifier.size(7.dp).clip(CircleShape).background(NakashColors.Live))
+                        Text(c.title, style = MaterialTheme.typography.titleLarge.copy(fontSize = 16.sp), maxLines = if (expanded) 1 else 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    (c.nowTitle ?: c.label)?.let { Text(it, color = Color.White.copy(alpha = .78f), style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                }
             }
             c.progress?.let { ProgressLine(it, Modifier.align(Alignment.BottomCenter)) }
         }

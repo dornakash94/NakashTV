@@ -152,7 +152,8 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
         } } }
         if (!immersive) TopNav(
             current = route, activeFocus = navFocus, floating = overlayNav, onFocusChanged = { navFocused = it },
-            onSelect = { nav.navigate(it.route) { launchSingleTop = true; popUpTo("home") } },
+            // Already on that section: just go back into its content, no reload.
+            onSelect = { if (it.route == route) scope.launch { kotlinx.coroutines.delay(250); runCatching { contentFocus.requestFocus() } } else nav.navigate(it.route) { launchSingleTop = true; popUpTo("home") } },
         )
     }
 }

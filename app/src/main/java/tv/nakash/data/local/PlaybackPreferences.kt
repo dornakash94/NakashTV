@@ -27,6 +27,12 @@ enum class RemoteAction(val label: String) {
  */
 data class RemoteBinding(val keyCode: Int, val name: String, val action: RemoteAction)
 
+/** While set, MainActivity hands every remote key to it first (Settings uses it to learn a button). */
+object KeyCapture {
+    @Volatile var onKey: ((Int) -> Unit)? = null
+    @Volatile internal var swallowUp = -1
+}
+
 data class PlaybackPreferencesState(
     val seekSeconds: Int = 10,
     val liveOkPauses: Boolean = false,
@@ -80,6 +86,15 @@ class PlaybackPreferences @Inject constructor(@ApplicationContext context: Conte
         prefs.edit().putStringSet("bound_keys", keys).remove("key_$keyCode").remove("key_name_$keyCode").apply()
         state.value = read()
     }
+    /** The buttons that trigger [action]. */
+    fun keysFor(action: RemoteAction): List<RemoteBinding> = state.value.bindings.filter { it.action == action }
+    /** One button per action: the button is taken from any action it had, and the action drops its old button. */
+    fun assign(action: RemoteAction, keyCode: Int): Boolean {
+        if (keyCode in RESERVED) return false
+        keysFor(action).filter { it.keyCode != keyCode }.forEach { unbind(it.keyCode) }
+        return bind(keyCode, action, keyName(keyCode))
+    }
+    fun clear(action: RemoteAction) { keysFor(action).forEach { unbind(it.keyCode) } }
     fun reset() {
         val e = prefs.edit().remove("seek_seconds").remove("live_ok_pauses").remove("bound_keys")
         prefs.all.keys.filter { it.startsWith("key_") }.forEach { e.remove(it) }
@@ -101,8 +116,22 @@ class PlaybackPreferences @Inject constructor(@ApplicationContext context: Conte
             RemoteBinding(KeyEvent.KEYCODE_GUIDE, "Guide", RemoteAction.MINI_EPG),
             RemoteBinding(KeyEvent.KEYCODE_BOOKMARK, "מועדפים", RemoteAction.FAVORITE),
         )
-        /** "KEYCODE_PROG_RED" → "Prog Red"; unknown → "מקש 187". */
+        private val HEBREW = mapOf(
+            KeyEvent.KEYCODE_PROG_RED to "הכפתור האדום", KeyEvent.KEYCODE_PROG_GREEN to "הכפתור הירוק",
+            KeyEvent.KEYCODE_PROG_YELLOW to "הכפתור הצהוב", KeyEvent.KEYCODE_PROG_BLUE to "הכפתור הכחול",
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE to "נגן / השהה", KeyEvent.KEYCODE_MEDIA_PLAY to "נגן", KeyEvent.KEYCODE_MEDIA_PAUSE to "השהה",
+            KeyEvent.KEYCODE_MEDIA_STOP to "עצור", KeyEvent.KEYCODE_MEDIA_FAST_FORWARD to "הרצה קדימה", KeyEvent.KEYCODE_MEDIA_REWIND to "הרצה אחורה",
+            KeyEvent.KEYCODE_MEDIA_NEXT to "הבא", KeyEvent.KEYCODE_MEDIA_PREVIOUS to "הקודם", KeyEvent.KEYCODE_MEDIA_RECORD to "הקלטה",
+            KeyEvent.KEYCODE_MENU to "תפריט", KeyEvent.KEYCODE_INFO to "מידע", KeyEvent.KEYCODE_GUIDE to "מדריך / Guide",
+            KeyEvent.KEYCODE_CAPTIONS to "כתוביות", KeyEvent.KEYCODE_CHANNEL_UP to "ערוץ +", KeyEvent.KEYCODE_CHANNEL_DOWN to "ערוץ −",
+            KeyEvent.KEYCODE_BOOKMARK to "מועדפים", KeyEvent.KEYCODE_SETTINGS to "הגדרות", KeyEvent.KEYCODE_TV_INPUT to "מקור / Input",
+            KeyEvent.KEYCODE_LAST_CHANNEL to "ערוץ קודם", KeyEvent.KEYCODE_SEARCH to "חיפוש", KeyEvent.KEYCODE_MEDIA_AUDIO_TRACK to "שפת שמע",
+            KeyEvent.KEYCODE_TV_ZOOM_MODE to "גודל תמונה", KeyEvent.KEYCODE_DVR to "DVR", KeyEvent.KEYCODE_WINDOW to "חלון / PiP",
+            KeyEvent.KEYCODE_BUTTON_A to "A", KeyEvent.KEYCODE_BUTTON_B to "B",
+        )
+        /** Hebrew name for common remote buttons; otherwise "Prog Red"-style from the key code, or "מקש 187". */
         fun keyName(keyCode: Int): String {
+            HEBREW[keyCode]?.let { return it }
             val raw = KeyEvent.keyCodeToString(keyCode)
             if (!raw.startsWith("KEYCODE_")) return "מקש $keyCode"
             return raw.removePrefix("KEYCODE_").lowercase().split('_').joinToString(" ") { it.replaceFirstChar(Char::uppercase) }

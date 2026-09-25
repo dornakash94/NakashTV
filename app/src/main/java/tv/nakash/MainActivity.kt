@@ -16,6 +16,16 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
     @Inject lateinit var accountStore: AccountStore
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        // Settings is learning a remote button: it gets every key first, before focus, dialogs or the media session.
+        tv.nakash.data.local.KeyCapture.onKey?.let { listener ->
+            if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                if (event.repeatCount == 0) { tv.nakash.data.local.KeyCapture.swallowUp = event.keyCode; listener(event.keyCode) }
+                return true
+            }
+        }
+        if (event.action == android.view.KeyEvent.ACTION_UP && event.keyCode == tv.nakash.data.local.KeyCapture.swallowUp) {
+            tv.nakash.data.local.KeyCapture.swallowUp = -1; return true
+        }
         // Hardware keyboards send ESC separately from the TV remote's BACK key.
         if (event.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) {
             if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0)

@@ -5,6 +5,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.background
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.focusable
@@ -72,12 +74,16 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
     var section by remember {mutableStateOf(0)}
     var confirm by remember {mutableStateOf(false)}
     var editingSeek by remember {mutableStateOf(false)}
-    var learning by remember {mutableStateOf(false)}          // waiting for a physical key press
-    var learnedKey by remember {mutableStateOf<Int?>(null)}   // key captured, now choose action
-    var editing by remember {mutableStateOf<RemoteBinding?>(null)}
+    var capturing by remember {mutableStateOf<RemoteAction?>(null)}   // waiting for the button for this action
+    var managing by remember {mutableStateOf<RemoteAction?>(null)}    // an assigned action: change / remove
+    var testing by remember {mutableStateOf(false)}                   // "which button is this?"
+    var addingKey by remember {mutableStateOf(false)}                 // button first, then its action
+    var pickFor by remember {mutableStateOf<Int?>(null)}
+    var saved by remember {mutableStateOf<String?>(null)}
+    LaunchedEffect(saved) {if(saved!=null) {kotlinx.coroutines.delay(3_000);saved=null}}
     var editingTmdb by remember {mutableStateOf(false)}
     val tmdbKey by vm.tmdbPrefs.key.collectAsState()
-    val sections=listOf("כללי","שלט","נגן","חשבון")
+    val sections=listOf("כללי","שלט רחוק","נגן","חשבון")
 
     Row(Modifier.fillMaxSize().padding(start=24.dp,end=40.dp,top=36.dp,bottom=24.dp)) {
         Column(Modifier.width(260.dp).padding(end=32.dp)) {
@@ -93,12 +99,22 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
                     status?.let {Text(it,color=NakashColors.Muted,modifier=Modifier.padding(start=16.dp,top=12.dp))}
                 }
                 1 -> {
-                    Text("כפתורים בשלט",style=MaterialTheme.typography.titleLarge,color=NakashColors.Muted,modifier=Modifier.padding(start=16.dp,bottom=8.dp))
-                    controls.bindings.forEach {b -> SettingRow(b.name,b.action.label) {editing=b} }
-                    SettingRow("＋ הוסף כפתור","לחץ על כפתור בשלט והגדר מה הוא עושה בנגן") {learning=true}
-                    Spacer(Modifier.height(18.dp))
-                    SettingRow("איפוס לברירת המחדל","") {vm.controls.reset()}
-                    Text("חצים, OK, חזרה, בית וספרות שמורים לניווט ואי אפשר להקצות אותם.",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(start=16.dp,top=14.dp))
+                    Text("בחר פעולה ולחץ על הכפתור שיבצע אותה, או הוסף כפתור ובחר לו פעולה.",color=NakashColors.Muted,style=MaterialTheme.typography.titleLarge.copy(fontSize=18.sp),modifier=Modifier.padding(start=16.dp,bottom=10.dp))
+                    androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f,false),verticalArrangement=Arrangement.spacedBy(2.dp)) {
+                        item {SettingRow("＋ הוספת כפתור","לחץ על כפתור בשלט ואז בחר מה הוא יעשה") {addingKey=true}}
+                        item {Spacer(Modifier.height(10.dp))}
+                        items(REMOTE_ACTIONS.size) {i ->
+                            val action=REMOTE_ACTIONS[i]
+                            val keys=controls.bindings.filter {it.action==action}
+                            SettingRow(action.label,if(keys.isEmpty()) "לא מוגדר" else keys.joinToString(" · ") {it.name}) {if(keys.isEmpty()) capturing=action else managing=action}
+                        }
+                        item {Spacer(Modifier.height(14.dp))}
+                        item {SettingRow("בדיקת כפתור","לחץ על כפתור בשלט וראה איך הוא נקרא ומה הוא עושה") {testing=true}}
+                        item {SettingRow("איפוס לברירת המחדל","") {vm.controls.reset();saved="הכפתורים חזרו להגדרות המקוריות"}}
+                        item {Text("חצים, OK, חזרה, בית, עוצמת שמע וספרות שמורים לניווט. כפתורים כמו Netflix או YouTube בשלט מופעלים על ידי הטלוויזיה עצמה ולא מגיעים לאפליקציה.",
+                            color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(start=16.dp,top=14.dp,end=16.dp))}
+                    }
+                    saved?.let {Text("✓ $it",color=NakashColors.Ok,style=MaterialTheme.typography.titleLarge.copy(fontSize=18.sp),modifier=Modifier.padding(start=16.dp,top=10.dp))}
                 }
                 2 -> {
                     SettingRow("גודל דילוג","${controls.seekSeconds} שניות") {editingSeek=true}
@@ -108,7 +124,7 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
                 }
                 3 -> {
                     SettingRow("התנתקות","פרטי הכניסה, הרשימה והיסטוריית הצפייה במכשיר יימחקו",enabled=!busy) {confirm=true}
-                    Text("NakashTV 0.2 · לצפייה על המסך הגדול",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(start=16.dp,top=14.dp))
+                    Text("NakashTV ${tv.nakash.BuildConfig.VERSION_NAME} · לצפייה על המסך הגדול",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(start=16.dp,top=14.dp))
                 }
             }
         }
@@ -119,26 +135,26 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
         PlaybackPreferences.SEEK_OPTIONS.forEach {seconds -> Action("${if(controls.seekSeconds==seconds) "✓ " else ""}$seconds שניות",{vm.controls.setSeek(seconds);editingSeek=false})}
     }}}
 
-    // Learn mode: any non-reserved key closes the dialog and moves on to the action picker.
-    if(learning) Dialog(onDismissRequest={learning=false}) {
-        val req=remember {androidx.compose.ui.focus.FocusRequester()}
-        LaunchedEffect(Unit) {kotlinx.coroutines.delay(80);runCatching {req.requestFocus()}}
-        Surface(Modifier.focusRequester(req).focusable().onPreviewKeyEvent {e ->
-            if(e.type!=androidx.compose.ui.input.key.KeyEventType.KeyDown) return@onPreviewKeyEvent false
-            val code=e.nativeKeyEvent.keyCode
-            if(code==android.view.KeyEvent.KEYCODE_BACK) {learning=false;return@onPreviewKeyEvent true}
-            if(code in PlaybackPreferences.RESERVED) return@onPreviewKeyEvent true
-            learnedKey=code;learning=false;true
-        }) {Column(Modifier.padding(32.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-            Text("לחץ עכשיו על הכפתור בשלט",style=MaterialTheme.typography.headlineMedium)
-            Text("כל כפתור שאינו חץ, OK, חזרה או בית. חזרה מבטלת.",color=NakashColors.Muted)
-        }}
-    }
-    val pickFor=learnedKey?.let {RemoteBinding(it,PlaybackPreferences.keyName(it),controls.action(it))} ?: editing
-    pickFor?.let {b -> Dialog(onDismissRequest={learnedKey=null;editing=null}) {Surface {Column(Modifier.padding(24.dp).width(420.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
-        Text("מה יעשה הכפתור „${b.name}“?",style=MaterialTheme.typography.titleLarge,modifier=Modifier.padding(bottom=8.dp))
-        RemoteAction.entries.filter {it!=RemoteAction.NONE}.forEach {action -> SettingRow(action.label,if(b.action==action) "✓" else "") {vm.controls.bind(b.keyCode,action,b.name);learnedKey=null;editing=null}}
-        if(editing!=null) SettingRow("הסר את הכפתור","") {vm.controls.unbind(b.keyCode);editing=null}
+    capturing?.let {action -> ButtonCaptureDialog(action.label,controls,{capturing=null}) {code ->
+        vm.controls.assign(action,code);capturing=null;saved="${PlaybackPreferences.keyName(code)} ← ${action.label}"}}
+    testing.takeIf {it}?.let {ButtonCaptureDialog(null,controls,{testing=false}) {}}
+    if(addingKey) ButtonCaptureDialog("",controls,{addingKey=false}) {code -> addingKey=false;pickFor=code}
+    pickFor?.let {code -> Dialog(onDismissRequest={pickFor=null}) {Surface {Column(Modifier.padding(28.dp).width(480.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+        val current=controls.actions[code]
+        Text("מה יעשה ${PlaybackPreferences.keyName(code)}?",style=MaterialTheme.typography.headlineMedium,modifier=Modifier.padding(bottom=10.dp))
+        androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max=420.dp),verticalArrangement=Arrangement.spacedBy(2.dp)) {
+            items(REMOTE_ACTIONS.size) {i -> val a=REMOTE_ACTIONS[i]
+                SettingRow(a.label,if(current==a) "✓ נוכחי" else "") {vm.controls.assign(a,code);pickFor=null;saved="${PlaybackPreferences.keyName(code)} ← ${a.label}"}}
+            if(current!=null) item {SettingRow("ללא פעולה (הסרה)","") {vm.controls.unbind(code);pickFor=null;saved="הוסר: ${PlaybackPreferences.keyName(code)}"}}
+        }
+    }}}}
+    managing?.let {action -> Dialog(onDismissRequest={managing=null}) {Surface {Column(Modifier.padding(28.dp).width(460.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+        Text(action.label,style=MaterialTheme.typography.headlineMedium)
+        Text("כפתור נוכחי: "+controls.bindings.filter {it.action==action}.joinToString(" · ") {it.name},color=NakashColors.Muted)
+        Spacer(Modifier.height(6.dp))
+        Action("הגדרת כפתור אחר",{managing=null;capturing=action},Modifier.fillMaxWidth())
+        Action("הסרת הכפתור",{vm.controls.clear(action);managing=null;saved="הוסר: ${action.label}"},Modifier.fillMaxWidth())
+        Action("ביטול",{managing=null},Modifier.fillMaxWidth())
     }}}}
 
     if(editingTmdb) Dialog(onDismissRequest={editingTmdb=false}) { Surface { Column(Modifier.padding(28.dp).width(620.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
@@ -163,6 +179,42 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
         Action("ביטול",{confirm=false})
         Action("התנתקות",{confirm=false;vm.logout()})
     } } }
+}
+
+private val REMOTE_ACTIONS=listOf(RemoteAction.PLAY_PAUSE,RemoteAction.TRACKS,RemoteAction.START_OVER,RemoteAction.MINI_EPG,RemoteAction.FAVORITE,
+    RemoteAction.SOURCE,RemoteAction.ASPECT,RemoteAction.CONTROLS,RemoteAction.MENU)
+
+/**
+ * Waits for a remote button. Keys are taken at the activity (KeyCapture), before focus, dialogs or the media
+ * session, so every button that reaches the app is seen. Back cancels. In test mode (title null) it just shows
+ * the name and current action of each button pressed.
+ */
+@Composable
+private fun ButtonCaptureDialog(forAction:String?,controls:tv.nakash.data.local.PlaybackPreferencesState,close:()->Unit,onKey:(Int)->Unit) {
+    var hint by remember {mutableStateOf<String?>(null)}
+    var secondsLeft by remember {mutableStateOf(15)}
+    DisposableEffect(Unit) {
+        KeyCapture.onKey={code ->
+            when {
+                code==android.view.KeyEvent.KEYCODE_BACK -> {KeyCapture.onKey=null;close()}
+                forAction==null -> {hint=PlaybackPreferences.keyName(code)+" · "+(controls.actions[code]?.label ?: "לא מוגדר");secondsLeft=15}
+                code in PlaybackPreferences.RESERVED -> hint="${PlaybackPreferences.keyName(code)} משמש לניווט. נסה כפתור אחר."
+                else -> {KeyCapture.onKey=null;onKey(code)}
+            }
+        }
+        onDispose {KeyCapture.onKey=null}
+    }
+    LaunchedEffect(Unit) {while(secondsLeft>0) {kotlinx.coroutines.delay(1_000);secondsLeft--};KeyCapture.onKey=null;close()}
+    // Drawn in the app's own window (not a Dialog): a Dialog is a separate window, and remote keys would go to it
+    // instead of MainActivity, where KeyCapture listens.
+    Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black.copy(alpha=.72f)),contentAlignment=Alignment.Center) {Surface {Column(Modifier.padding(36.dp).width(560.dp),verticalArrangement=Arrangement.spacedBy(14.dp),horizontalAlignment=Alignment.CenterHorizontally) {
+        Text(if(forAction!=null) "לחץ עכשיו על הכפתור בשלט" else "בדיקת כפתור",style=MaterialTheme.typography.headlineMedium)
+        Text(when {forAction==null -> "לחץ על כפתור כלשהו בשלט"; forAction.isEmpty() -> "אחרי זה תבחר מה הוא יעשה"; else -> "הכפתור יבצע: $forAction"},color=NakashColors.Muted,style=MaterialTheme.typography.titleLarge)
+        Box(Modifier.fillMaxWidth().height(64.dp).background(NakashColors.S2,androidx.compose.foundation.shape.RoundedCornerShape(12.dp)),contentAlignment=Alignment.Center) {
+            Text(hint ?: "…",style=MaterialTheme.typography.titleLarge.copy(fontSize=22.sp),color=if(hint!=null && forAction!=null) NakashColors.Live else NakashColors.Text)
+        }
+        Text("חזרה לביטול · נסגר לבד בעוד $secondsLeft שניות",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge)
+    }}}
 }
 
 @Composable
