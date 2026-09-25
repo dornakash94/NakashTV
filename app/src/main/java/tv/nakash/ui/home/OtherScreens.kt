@@ -33,7 +33,15 @@ import javax.inject.Inject
 @Composable fun SearchScreen(nav: NavHostController) = tv.nakash.ui.search.TvSearchScreen(nav)
 
 @HiltViewModel
-class SettingsViewModel @Inject constructor(private val account: AccountStore, private val catalog: CatalogRepository, private val epg: EpgRepository, private val user: UserRepository, private val player: PlayerController, private val preview: PreviewPlayer, private val db: NakashDb, val controls:PlaybackPreferences) : ViewModel() {
+class SettingsViewModel @Inject constructor(private val account: AccountStore, private val catalog: CatalogRepository, private val epg: EpgRepository, private val user: UserRepository, private val player: PlayerController, private val preview: PreviewPlayer, private val db: NakashDb, val controls:PlaybackPreferences, val tmdbPrefs:TmdbPreferences, private val tmdb:tv.nakash.data.remote.TmdbRepository) : ViewModel() {
+    val tmdbStatus=MutableStateFlow<String?>(null)
+    fun saveTmdb(key:String,done:()->Unit)=viewModelScope.launch {
+        val k=key.trim()
+        if(k.isEmpty()) {tmdbStatus.value="הקלד מפתח";return@launch}
+        tmdbStatus.value="בודקים את המפתח…"
+        if(tmdb.validate(k)) {tmdbPrefs.set(k);tmdbStatus.value=null;done()} else tmdbStatus.value="TMDB לא אישר את המפתח. בדוק שהקלדת את ה־API Key (32 תווים)."
+    }
+    fun clearTmdb()=tmdbPrefs.set(null)
     val status=MutableStateFlow<String?>(null)
     val busy=MutableStateFlow(false)
     fun refresh() = viewModelScope.launch {
@@ -67,6 +75,8 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
     var learning by remember {mutableStateOf(false)}          // waiting for a physical key press
     var learnedKey by remember {mutableStateOf<Int?>(null)}   // key captured, now choose action
     var editing by remember {mutableStateOf<RemoteBinding?>(null)}
+    var editingTmdb by remember {mutableStateOf(false)}
+    val tmdbKey by vm.tmdbPrefs.key.collectAsState()
     val sections=listOf("כללי","שלט","נגן","חשבון")
 
     Row(Modifier.fillMaxSize().padding(start=24.dp,end=40.dp,top=36.dp,bottom=24.dp)) {
@@ -79,6 +89,7 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
                 0 -> {
                     SettingRow("רענון כל התכנים", if(busy) "מעדכנים…" else "ערוצים, סרטים, סדרות ולוח שידורים", enabled=!busy) {vm.refresh()}
                     SettingRow("הצג שוב ערוצים שהוסתרו","") {vm.restoreChannels()}
+                    SettingRow("טריילרים ומידע מ־TMDB", if(tmdbKey!=null) "מחובר" else "הוספת מפתח API") {editingTmdb=true}
                     status?.let {Text(it,color=NakashColors.Muted,modifier=Modifier.padding(start=16.dp,top=12.dp))}
                 }
                 1 -> {
@@ -129,6 +140,22 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
         RemoteAction.entries.filter {it!=RemoteAction.NONE}.forEach {action -> SettingRow(action.label,if(b.action==action) "✓" else "") {vm.controls.bind(b.keyCode,action,b.name);learnedKey=null;editing=null}}
         if(editing!=null) SettingRow("הסר את הכפתור","") {vm.controls.unbind(b.keyCode);editing=null}
     }}}}
+
+    if(editingTmdb) Dialog(onDismissRequest={editingTmdb=false}) { Surface { Column(Modifier.padding(28.dp).width(620.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+        val tmdbStatus by vm.tmdbStatus.collectAsState()
+        var draft by remember {mutableStateOf("")}
+        Text("טריילרים ומידע מ־TMDB",style=MaterialTheme.typography.headlineMedium)
+        Text("עם מפתח API אישי מ־TMDB, דפי הסרטים והסדרות מציגים טריילר רשמי, שחקנים וכותרים דומים מהספרייה שלך.",color=NakashColors.Muted)
+        if(tmdbKey!=null) Text("המפתח מחובר.",color=NakashColors.Ok)
+        tv.nakash.ui.library.SearchField(draft,{draft=it},if(tmdbKey!=null) "מפתח חדש (API Key)" else "API Key")
+        tmdbStatus?.let {Text(it,color=NakashColors.Muted)}
+        Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+            Action("שמירה",{vm.saveTmdb(draft) {editingTmdb=false}})
+            if(tmdbKey!=null && !(vm.tmdbPrefs.hasBuiltIn && tmdbKey==tv.nakash.BuildConfig.TMDB_KEY)) Action(if(vm.tmdbPrefs.hasBuiltIn) "חזרה למפתח המובנה" else "הסרת המפתח",{vm.clearTmdb();editingTmdb=false})
+            Action("ביטול",{editingTmdb=false})
+        }
+        Text("This product uses the TMDB API but is not endorsed or certified by TMDB.",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge)
+    } } }
 
     if(confirm) Dialog(onDismissRequest={confirm=false}) { Surface { Column(Modifier.padding(28.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
         Text("להתנתק מהחשבון?",style=MaterialTheme.typography.titleLarge)

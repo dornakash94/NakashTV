@@ -114,6 +114,7 @@ class LiveViewModel @Inject constructor(
     val focused=MutableStateFlow<ChannelEntity?>(null)
     val next=MutableStateFlow<EpgEntity?>(null)
     val previewPlayer get()=preview.player
+    val previewFrame get()=preview.hasFrame
     private var focusJob:kotlinx.coroutines.Job?=null
     fun focus(c:ChannelEntity) {
         focused.value=c;next.value=null;preview.focus(c.id,this)
@@ -188,7 +189,22 @@ fun LiveScreen(nav: NavHostController, vm: LiveViewModel = hiltViewModel()) {
             digits = ""
         }
     }
-    Column(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+    val hasFrame by vm.previewFrame.collectAsState()
+    if(selected==null) Box(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+        val code=event.nativeKeyEvent.keyCode
+        if(event.type==KeyEventType.KeyDown && code in 7..16) { digits=(digits+(code-7)).takeLast(4);true } else false
+    }) {
+        val rows=shelves.map { shelf -> tv.nakash.ui.components.RowShelf("live${shelf.id}",shelf.title,cards=shelf.channels.map { c ->
+            val p=now[c.id]
+            tv.nakash.ui.components.RowCard("c${c.id}",tv.nakash.ui.components.CardKind.CHANNEL,c.displayName,channel=c,nowTitle=p?.title,
+                meta=listOfNotNull("ערוץ ${c.number}",p?.let { "${fmtTime(it.start)}–${fmtTime(it.end)}" },next?.takeIf { focused?.id==c.id }?.let { "הבא: ${it.title}" }).joinToString("  ·  "),plot=p?.description,
+                progress=p?.takeIf { it.end>it.start }?.let { ((clock-it.start).toFloat()/(it.end-it.start)).coerceIn(0f,1f) },
+                onFocus={vm.focus(c)},onClick={play(c,category=shelf.id)},onLongClick={context=c;contextCategory=shelf.id;vm.context(c)})
+        },onShowAll={vm.selected.value=shelf.id}) }
+        tv.nakash.ui.components.NetflixRowsPage(rows,vm.previewPlayer,hasFrame,gridFocus,restoreKey="live")
+        if(digits.isNotEmpty()) Text(digits,Modifier.align(Alignment.TopStart).padding(top=64.dp,start=24.dp).background(NakashColors.S1.copy(alpha=.92f),RoundedCornerShape(9.dp)).padding(horizontal=16.dp,vertical=7.dp),style=MaterialTheme.typography.titleLarge.copy(fontSize=20.sp))
+    }
+    else Column(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
         val code=event.nativeKeyEvent.keyCode
         if(event.type==KeyEventType.KeyDown && code in 7..16) { digits=(digits+(code-7)).takeLast(4);true } else false
     }) {

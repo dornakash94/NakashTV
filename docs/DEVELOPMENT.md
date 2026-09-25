@@ -29,3 +29,13 @@ assembleDebug and all 39 unit tests passed on 2026-09-19 after the missing decla
 ## Release 0.2.0-beta.2 (2026-09-20)
 
 Published the Netflix-grade UI overhaul as v0.2.0-beta.2 (versionCode 4), release-signed with the NakashTV distribution key (same certificate as prior releases, so it updates in place). Distribution URL is the fixed asset the Downloader code resolves to: the NakashTV.apk asset on the v0.1.0-beta.1 release. That asset was replaced (gh release upload --clobber) with the 0.2.0-beta.2 build, so Downloader code 4033247 keeps working and updates in place. Tag v0.2.0-beta.2 also holds the same APK as a versioned archive. To ship a future build without changing the code, replace that same v0.1.0-beta.1/NakashTV.apk asset again.
+
+## TMDB extras (2026-09-25)
+
+Detail pages use TMDB for the official YouTube trailer (muted in a framed player, "▶ טריילר" for full screen with sound), cast with photos, "similar" titles that exist in the provider library, and a backdrop/Hebrew overview when the provider lacks them. Movies use the provider's tmdb_id; series are found by title and year. Responses are cached on disk for 7 days (cacheDir/tmdb). Trailers play only in YouTube's official embedded player (IFrame API in a WebView); nothing is drawn over it.
+
+Key: put `tmdb.apiKey=<API Key>` in local.properties on the build machine (git-ignored), or set NAKASHTV_TMDB_KEY. It is compiled into BuildConfig.TMDB_KEY, so every installed TV works with no setup. Settings → כללי → "טריילרים ומידע מ־TMDB" can override it. The provider auth interceptor is removed from the TMDB client, so provider credentials never reach TMDB.
+
+## Release 0.3.0-beta.1 (2026-09-25)
+
+Netflix-style browse (billboard with trailer on Movies/Series; rows with widening cards and in-card trailers on Home, Movies, Series; channel cards with in-card live preview on Home and Live), Netflix-style detail page with full-screen trailer and a "כותרים דומים" panel, continuous catch-up, program-ribbon player, TMDB extras, pre-built search index. Published by replacing the v0.1.0-beta.1/NakashTV.apk asset (Downloader code 4033247) and tagged v0.3.0-beta.1 as an archive.

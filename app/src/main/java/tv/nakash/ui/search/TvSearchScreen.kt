@@ -41,14 +41,16 @@ import tv.nakash.ui.theme.NakashColors
 import javax.inject.Inject
 
 internal data class SearchTile(val document:SearchDocument,val image:String?,val year:Int?,val kind:String,val ref:String,val channel:ChannelEntity?=null)
-private data class SearchCatalog(val tiles:Map<String,SearchTile> = emptyMap(),val documents:List<SearchDocument> = emptyList())
+internal data class SearchCatalog(val tiles:Map<String,SearchTile> = emptyMap(),val documents:List<SearchDocument> = emptyList())
 internal data class SearchResults(val items:List<SearchTile> = emptyList(),val suggestions:List<String> = emptyList(),val total:Int=0)
-@OptIn(kotlinx.coroutines.FlowPreview::class)
-@HiltViewModel
-class TvSearchViewModel @Inject constructor(catalog:CatalogRepository,private val player:PlayerController,private val saved:SavedStateHandle):ViewModel() {
-    val query=saved.getStateFlow("searchQuery","")
-    fun edit(value:String) {saved["searchQuery"]=value.take(80)}
-    private val index=combine(catalog.newestMovies(Int.MAX_VALUE),catalog.recentlyUpdatedSeries(Int.MAX_VALUE),catalog.channels()) { movies,series,channels ->
+/**
+ * The search index, built once for the whole app (warmed when the app starts) and kept up to date as the library
+ * changes, so opening the search page never waits for all titles to be read and normalized again.
+ */
+@javax.inject.Singleton
+class SearchIndex @Inject constructor(catalog:CatalogRepository) {
+    private val scope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+Dispatchers.Default)
+    internal val index=combine(catalog.newestMovies(Int.MAX_VALUE),catalog.recentlyUpdatedSeries(Int.MAX_VALUE),catalog.channels()) { movies,series,channels ->
         val tiles=buildList {
             movies.forEach { m -> add(SearchTile(SearchDocument("m${m.id}",m.title,listOfNotNull(m.cast,m.director,m.genres).joinToString(" ")),m.poster,m.year,"סרט",m.id.toString())) }
             series.forEach { s -> add(SearchTile(SearchDocument("s${s.id}",s.title,listOfNotNull(s.cast,s.genres).joinToString(" ")),s.cover,s.year,"סדרה",s.id.toString())) }
@@ -56,7 +58,15 @@ class TvSearchViewModel @Inject constructor(catalog:CatalogRepository,private va
         }
         val ordered=tv.nakash.domain.DiscoveryOrder.interleave(tiles.filter {it.kind=="סרט"},tiles.filter {it.kind=="סדרה"})+tiles.filter {it.channel!=null}
         SearchCatalog(ordered.associateBy {it.document.id},ordered.map {it.document})
-    }.flowOn(Dispatchers.Default).stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),SearchCatalog())
+    }.flowOn(Dispatchers.Default).stateIn(scope,SharingStarted.Eagerly,SearchCatalog())
+}
+
+@OptIn(kotlinx.coroutines.FlowPreview::class)
+@HiltViewModel
+class TvSearchViewModel @Inject constructor(searchIndex:SearchIndex,private val player:PlayerController,private val saved:SavedStateHandle):ViewModel() {
+    val query=saved.getStateFlow("searchQuery","")
+    fun edit(value:String) {saved["searchQuery"]=value.take(80)}
+    private val index=searchIndex.index
     internal val results=combine(index,query.debounce(120)) { data,q ->
         val matches=SearchEngine.search(data.documents,q)
         SearchResults(matches.items.mapNotNull {data.tiles[it.id]},matches.suggestions,matches.total)

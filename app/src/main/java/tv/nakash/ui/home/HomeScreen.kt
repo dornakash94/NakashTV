@@ -103,54 +103,49 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
     LaunchedEffect(rows) { if(hero == null) rows.firstOrNull { it.items.isNotEmpty() }?.items?.firstOrNull()?.let { vm.onFocus(it) }; vm.warmNow(rows.flatMap { it.items }.filterIsInstance<ChannelEntity>()) }
 
     val toast by vm.toast.collectAsState()
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val heroHeight = maxHeight * 0.49f
-        Hero(hero, vm, heroHeight+55.dp, ::activate, {nav.navigate("guide")})
+    val hasFrame by vm.previewFrame.collectAsState()
+    fun openContinue(item: ContinueItem) = when (item.progress.kind) {
+        "movie" -> nav.navigate("movie/${item.progress.refId}")
+        "episode" -> item.progress.seriesId?.let { nav.navigate("seriesDetail/$it") }
+        "channel" -> playerVm.playChannelId(item.progress.refId.toInt()) { nav.navigate("player") }
+        else -> Unit
+    }
+    val shelves = rows.filter { it.items.isNotEmpty() }.map { row ->
+        tv.nakash.ui.components.RowShelf(row.key, row.title, row.subtitle, row.items.map { item ->
+            when (item) {
+                is ChannelEntity -> {
+                    val now = nowMap[item.epgChannelId]
+                    tv.nakash.ui.components.RowCard("c${item.id}", tv.nakash.ui.components.CardKind.CHANNEL, item.displayName, channel = item,
+                        nowTitle = now?.title, meta = listOfNotNull("ערוץ ${item.number}", now?.let { "${fmtTime(it.start)}–${fmtTime(it.end)}" }).joinToString("  ·  "), plot = now?.description,
+                        progress = now?.takeIf { it.end > it.start }?.let { ((nowSec - it.start).toFloat() / (it.end - it.start)).coerceIn(0f, 1f) },
+                        onFocus = { vm.onFocus(item) }, onClick = { playerVm.play(PlayRequest.Live(item)); nav.navigate("player") }, onLongClick = { vm.toggleFavorite(item) })
+                }
+                is MovieEntity -> tv.nakash.ui.components.RowCard("m${item.id}", tv.nakash.ui.components.CardKind.POSTER, item.title, item.poster, item.backdrop,
+                    listOfNotNull(item.year?.toString(), item.genres.split(',').firstOrNull()?.takeIf { it.isNotBlank() }).joinToString("  ·  "), item.plot,
+                    trailer = { vm.tmdb.movie(item.tmdbId, item.title, item.year)?.trailerKey }, onFocus = { vm.onFocus(item) }, onClick = { nav.navigate("movie/${item.id}") })
+                is SeriesEntity -> tv.nakash.ui.components.RowCard("s${item.id}", tv.nakash.ui.components.CardKind.POSTER, item.title, item.cover, item.backdrop,
+                    listOfNotNull(item.year?.toString(), item.genres.split(',').firstOrNull()?.takeIf { it.isNotBlank() }).joinToString("  ·  "), item.plot,
+                    trailer = { vm.tmdb.tv(item.title, item.year)?.trailerKey }, onFocus = { vm.onFocus(item) }, onClick = { nav.navigate("seriesDetail/${item.id}") })
+                is ContinueItem -> {
+                    val p = item.progress
+                    tv.nakash.ui.components.RowCard("w${p.key}", tv.nakash.ui.components.CardKind.WIDE, item.title, wide = item.image,
+                        label = if (p.durationMs > 0) "נותרו ${((p.durationMs - p.positionMs).coerceAtLeast(0) / 60000)} דק׳" else null,
+                        progress = if (p.durationMs > 0) (p.positionMs.toFloat() / p.durationMs).coerceIn(0f, 1f) else null,
+                        onFocus = { vm.onFocus(item) }, onClick = { openContinue(item) })
+                }
+                else -> tv.nakash.ui.components.RowCard(keyOf(item), tv.nakash.ui.components.CardKind.WIDE, "", onClick = {})
+            }
+        })
+    }
+    Box(Modifier.fillMaxSize()) {
+        if (rows.all { it.items.isEmpty() }) Column(Modifier.padding(top = 90.dp, start = 40.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("ברוכים הבאים ל־NakashTV", style = MaterialTheme.typography.headlineMedium)
+            Text("התכנים נטענים מהספק. אם הספרייה נשארת ריקה, אפשר לרענן אותה בהגדרות.", color = NakashColors.Muted)
+            tv.nakash.ui.library.Action("מעבר להגדרות", { nav.navigate("settings") })
+        } else tv.nakash.ui.components.NetflixRowsPage(shelves, vm.previewPlayer, hasFrame, rowsFocus, restoreKey = "home")
         toast?.let { msg ->
             LaunchedEffect(msg) { kotlinx.coroutines.delay(2_200); vm.clearToast() }
-            Text(msg, style = MaterialTheme.typography.titleLarge, modifier = Modifier.align(Alignment.TopStart).padding(top = tv.nakash.ui.nav.NavBarHeight + 8.dp, start = 28.dp).background(NakashColors.S1.copy(alpha = .95f), RoundedCornerShape(10.dp)).padding(horizontal = 18.dp, vertical = 12.dp))
-        }
-        if(rows.all { it.items.isEmpty() }) Column(Modifier.padding(40.dp), verticalArrangement=Arrangement.spacedBy(16.dp)) {
-            Text("ברוכים הבאים ל־NakashTV",style=MaterialTheme.typography.headlineMedium)
-            Text("התכנים נטענים מהספק. אם הספרייה נשארת ריקה, אפשר לרענן אותה בהגדרות.",color=NakashColors.Muted)
-            tv.nakash.ui.library.Action("מעבר להגדרות",{nav.navigate("settings")})
-        }
-        // Align the whole focused shelf, including its heading, below the fixed hero.
-        // Automatic card-centering previously left a fragment of the preceding shelf visible.
-        CompositionLocalProvider(LocalBringIntoViewSpec provides manualShelfScroll) {
-        LazyColumn(
-            Modifier.fillMaxSize().padding(top = heroHeight).clipToBounds().focusGroup(),
-            state=shelfState,
-            contentPadding = PaddingValues(bottom = (maxHeight-heroHeight-128.dp).coerceAtLeast(24.dp)),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            columnItemsIndexed(rows, key = { _, r -> r.key }) { rowIndex, row ->
-                Column {
-                    Row(Modifier.padding(start = 32.dp), verticalAlignment = Alignment.Bottom) {
-                        Text(row.title, style = MaterialTheme.typography.titleLarge.copy(fontSize=16.sp,lineHeight=20.sp))
-                        row.subtitle?.let { Spacer(Modifier.width(10.dp)); Text(it, style = MaterialTheme.typography.labelLarge.copy(fontSize=12.sp), color = NakashColors.Muted) }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    NetflixRow {
-                        columnItemsIndexed(row.items, key = { _, it -> keyOf(it) }) { itemIndex, item ->
-                            // Entry focus goes to the first card of the first row (the RTL start), not a spatial guess.
-                            Box(if (rowIndex == 0 && itemIndex == 0) Modifier.focusRequester(rowsFocus).focusGroup() else Modifier) {
-                            when (item) {
-                                is ChannelEntity -> ChannelCard(item, nowMap[item.epgChannelId], nowSec, onFocus = { focusedShelf=row.key;vm.onFocus(item) }, compact=true,
-                                    onClick = { playerVm.play(PlayRequest.Live(item)); nav.navigate("player") },
-                                    onLongClick = { vm.toggleFavorite(item) })
-                                is MovieEntity -> PosterCard(item.title, item.year, item.poster, null, onFocus = { focusedShelf=row.key;vm.onFocus(item) }, onClick = { nav.navigate("movie/${item.id}") }, backdrop = item.backdrop)
-                                is SeriesEntity -> PosterCard(item.title, item.year, item.cover, null, onFocus = { focusedShelf=row.key;vm.onFocus(item) }, onClick = { nav.navigate("seriesDetail/${item.id}") }, backdrop = item.backdrop)
-                                is ContinueItem -> ContinueCard(item, onFocus = { focusedShelf=row.key;vm.onFocus(item) }, onClick = {
-                                    when (item.progress.kind) { "movie" -> nav.navigate("movie/${item.progress.refId}"); "episode" -> item.progress.seriesId?.let { nav.navigate("seriesDetail/$it") }; "channel" -> playerVm.playChannelId(item.progress.refId.toInt()) { nav.navigate("player") } }
-                                })
-                            }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+            Text(msg, style = MaterialTheme.typography.titleLarge, modifier = Modifier.align(Alignment.BottomStart).padding(28.dp).background(NakashColors.S1.copy(alpha = .95f), RoundedCornerShape(10.dp)).padding(horizontal = 18.dp, vertical = 12.dp))
         }
     }
 }

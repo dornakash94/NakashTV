@@ -27,7 +27,7 @@ import tv.nakash.ui.theme.NakashColors
 import javax.inject.Inject
 
 @HiltViewModel
-class LibraryViewModel @Inject constructor(val catalog: CatalogRepository, val user: UserRepository, val player: PlayerController, val preview: PreviewPlayer, val thumbs:ThumbnailGenerator) : ViewModel() {
+class LibraryViewModel @Inject constructor(val catalog: CatalogRepository, val user: UserRepository, val player: PlayerController, val preview: PreviewPlayer, val thumbs:ThumbnailGenerator, val tmdb: tv.nakash.data.remote.TmdbRepository, val tmdbPrefs: tv.nakash.data.local.TmdbPreferences) : ViewModel() {
     val movies = catalog.newestMovies(Int.MAX_VALUE).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val series = catalog.recentlyUpdatedSeries(Int.MAX_VALUE).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val channels = catalog.channels().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -43,6 +43,24 @@ class LibraryViewModel @Inject constructor(val catalog: CatalogRepository, val u
         loading.value = false
     }
     fun play(c: ChannelEntity) { player.zapChannels.value = channels.value; player.play(PlayRequest.Live(c)) }
+
+    /** Movie or series straight into the player: resumes where you stopped, otherwise from the start / first episode. */
+    suspend fun playTitle(id: Int, series: Boolean): Boolean {
+        if (!series) {
+            val m = catalog.movie(id).first() ?: return false
+            val saved = user.progress("movie", id.toString())
+            player.play(PlayRequest.Movie(m.id, m.title, m.containerExt, saved?.takeUnless { it.completed }?.positionMs ?: 0)); return true
+        }
+        runCatching { catalog.ensureSeriesDetail(id) }
+        val seasons = catalog.seasons(id).first()
+        val latest = user.latestForSeries(id)
+        var last: EpisodeEntity? = null
+        for (s in seasons) { last = catalog.episodes(id, s.number).first().firstOrNull { it.id == latest?.refId }; if (last != null) break }
+        val e = (if (last != null && latest?.completed == true) catalog.nextEpisode(id, last.season, last.number) else last)
+            ?: seasons.firstOrNull()?.let { catalog.episodes(id, it.number).first().firstOrNull() } ?: return false
+        val pos = if (e.id == latest?.refId && latest.completed != true) latest.positionMs else 0
+        player.play(PlayRequest.Episode(e.id, e.seriesId, e.season, e.number, e.title, e.containerExt, pos)); return true
+    }
 }
 
 @Composable

@@ -603,8 +603,7 @@ private fun BoxScope.FilmstripOverlay(title: String, sub: String, posMs: Long, d
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 pills()
-                Spacer(Modifier.weight(1f))
-                Text(hint, style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp), color = NakashColors.Muted, maxLines = 1)
+
             }
         }
     }

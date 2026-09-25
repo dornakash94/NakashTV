@@ -41,6 +41,8 @@ class HomeViewModel @Inject constructor(
     private val epg: EpgRepository,
     private val user: UserRepository,
     private val preview: PreviewPlayer,
+    @Suppress("unused") searchIndex: tv.nakash.ui.search.SearchIndex,   // created with Home so search is ready
+    val tmdb: tv.nakash.data.remote.TmdbRepository,
 ) : ViewModel() {
 
     private val kidsPattern = Regex("ילדים|לוגי|ניק|Nick|כוכבים|הופ|לולי|בייבי|דיסני|Zoom|חינוכית")
@@ -132,5 +134,6 @@ class HomeViewModel @Inject constructor(
     fun stopPreview() { focusJob?.cancel();preview.stop(this) }
     val previewPlayer get() = preview.player
     val previewMuted get()=preview.muted
+    val previewFrame get()=preview.hasFrame
     fun togglePreviewMute()=preview.toggleMute()
 }

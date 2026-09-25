@@ -1,0 +1,7 @@
+{"id":550,"title":"מועדון קרב","overview":"צעיר מתוסכל מקים מועדון.","backdrop_path":"/bd.jpg",
+ "videos":{"results":[{"site":"YouTube","key":"clipKey1234","type":"Clip","official":true,"iso_639_1":"en"},
+   {"site":"YouTube","key":"enTrailer01","type":"Trailer","official":true,"iso_639_1":"en"},
+   {"site":"Vimeo","key":"vimeo","type":"Trailer","official":true,"iso_639_1":"he"},
+   {"site":"YouTube","key":"heTrailer01","type":"Trailer","official":false,"iso_639_1":"he"}]},
+ "credits":{"cast":[{"name":"Brad Pitt","character":"Tyler Durden","profile_path":"/bp.jpg"},{"name":"Edward Norton","character":null,"profile_path":null}]},
+ "recommendations":{"results":[{"id":807,"title":"שבעה חטאים","original_title":"Se7en","release_date":"1995-09-22","poster_path":"/s7.jpg"},{"id":1,"title":"No Match","release_date":"2001-01-01"}]}}

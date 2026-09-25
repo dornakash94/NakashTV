@@ -1,3 +1,4 @@
+import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -15,9 +16,15 @@ android {
         testInstrumentationRunner = "tv.nakash.TvSmokeRunner"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.2.0-beta.2"
+        versionCode = 5
+        versionName = "0.3.0-beta.1"
         buildConfigField("String", "USER_AGENT", "\"NakashTV/0.1 (Android TV)\"")
+        // Built-in TMDB key so no one has to type it on the TV. Set `tmdb.apiKey=...` in local.properties (not in git)
+        // or the NAKASHTV_TMDB_KEY environment variable on the build machine. Empty = TMDB extras off until set in Settings.
+        val tmdbKey = (rootProject.file("local.properties").takeIf { it.isFile }?.let { f ->
+            Properties().apply { f.inputStream().use { load(it) } }.getProperty("tmdb.apiKey")
+        } ?: System.getenv("NAKASHTV_TMDB_KEY") ?: "").trim().filter { it.isLetterOrDigit() }
+        buildConfigField("String", "TMDB_KEY", "\"$tmdbKey\"")
     }
     signingConfigs {
         create("distribution") {
