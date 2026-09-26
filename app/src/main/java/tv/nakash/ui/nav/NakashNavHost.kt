@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -167,6 +168,8 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
             // Already on that section: just go back into its content, no reload.
             onSelect = { if (it.route == route) scope.launch { kotlinx.coroutines.delay(250); runCatching { contentFocus.requestFocus() } } else goTab(it.route) },
         )
+        // Israel time on every screen, top right (absolute: the app is RTL, so a plain TopEnd would be the left).
+        tv.nakash.ui.components.IsraelClock(Modifier.align(androidx.compose.ui.AbsoluteAlignment.TopRight).absolutePadding(top = 12.dp, right = 40.dp))
     }
 }
 

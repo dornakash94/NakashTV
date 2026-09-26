@@ -214,6 +214,9 @@ class PlayerController @Inject constructor(
     // ---------- internals ----------
     private fun setUrl(url: String, title: String, live: Boolean, startMs: Long = 0) {
         val item = MediaItem.Builder().setUri(url).setMediaMetadata(MediaMetadata.Builder().setTitle(title).build()).build()
+        // A fresh decoder for every new stream. Reused across a resolution change (a 720p channel after a 1080p one),
+        // the decoder's pictures were drawn unscaled in the corner over the old frame.
+        player.stop()
         player.setMediaItem(item, if (startMs > 0) startMs else C.TIME_UNSET)
         player.prepare(); player.playWhenReady = true
         _state.update { it.copy(error = null) }

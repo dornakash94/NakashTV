@@ -7,6 +7,8 @@
         <domain includeSubdomains="true">ilvip11.net</domain>
         <!-- Explicitly approved provider playback host. -->
         <domain includeSubdomains="false">ilvip20.net</domain>
+        <!-- Catch-up (timeshift) for some channels, e.g. Discovery, is redirected here (observed 2026-09-26). -->
+        <domain includeSubdomains="false">ilvip12.net</domain>
         <domain includeSubdomains="false">ilvipl2.net</domain>
         <domain includeSubdomains="false">ilvipl1.net</domain>
         <domain includeSubdomains="false">50.7.204.26</domain>
