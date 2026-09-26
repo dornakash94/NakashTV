@@ -98,6 +98,9 @@ fun NetflixRowsPage(
     suspend fun trailerOf(c: RowCard): String? = extrasOf(c)?.trailerKey
     var stageOrigin by remember { mutableStateOf(Offset.Zero) }
     var cardBounds by remember { mutableStateOf<Rect?>(null) }
+    // Where the focused card is, updated every frame while it widens or the row slides. Kept outside Compose state
+    // (writing state there recomposed the whole page every frame); copied into [cardBounds] only when a trailer is due.
+    val liveBounds = remember { arrayOfNulls<Rect>(1) }
     var want by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf<String?>(null) }
     val focused = shelves.firstOrNull { it.key == focusedShelf }?.cards?.firstOrNull { it.key == focusedCard }
@@ -105,7 +108,9 @@ fun NetflixRowsPage(
         want = null
         val c = focused ?: return@LaunchedEffect
         if (c.kind != CardKind.POSTER) return@LaunchedEffect
-        delay(350); want = trailerOf(c)
+        delay(350)
+        val k = trailerOf(c) ?: return@LaunchedEffect
+        cardBounds = liveBounds[0]; want = k
     }
     LaunchedEffect(focusedShelf, shelves) {
         val i = shelves.indexOfFirst { it.key == focusedShelf }
@@ -118,9 +123,9 @@ fun NetflixRowsPage(
     val tintSource = focused?.let { extras[it.key]?.backdrop ?: it.wide ?: it.poster ?: it.channel?.logo }
     var tint by remember(restoreKey) { mutableStateOf(Color(0xFF1B1D22)) }
     LaunchedEffect(tintSource) { delay(250); dominantColor(ctx, tintSource)?.let { tint = it } }
-    val scrolled by rememberScrolledPx(list)
+    val scrolled = rememberScrolledPx(list)
     Box(modifier.fillMaxSize()) {
-        ScrollTintBackground(tint, scrolled)
+        ScrollTintBackground(tint, { scrolled.value })
         Box(Modifier.fillMaxSize().onGloballyPositioned { stageOrigin = it.positionInRoot() }) { TrailerStage(target, onPlaying = { playing = it }) }
         // Scrolling is driven only by focus changes here (rows to the top, cards to the row start), never by the
         // system's bring-into-view, which nudged the row down on the first move across it.
@@ -163,9 +168,13 @@ fun NetflixRowsPage(
                                 itemsIndexed(shelf.cards, key = { _, c -> c.key }) { i, c ->
                                     val isFocused = rowFocused && focusedCard == c.key
                                     Box(if (i == 0) Modifier.focusRequester(rowFirst).then(if (shelfIndex == 0) Modifier.focusRequester(firstFocus) else Modifier) else Modifier) {
-                                        val onF = { focusedShelf = shelf.key; focusedCard = c.key; c.onFocus() }
-                                        PosterExpandingCard(c.copy(wide = extras[c.key]?.backdrop ?: c.wide), isFocused, isFocused && playing != null && playing == target?.key,
-                                            { if (isFocused) cardBounds = it }, onF, previewPlayer, isFocused && previewHasFrame)
+                                        // Same objects from one pass to the next, so cards whose inputs did not change skip recomposition.
+                                        val onF = remember(shelf.key, c) { { focusedShelf = shelf.key; focusedCard = c.key; c.onFocus() } }
+                                        val onB = remember(isFocused) { { r: Rect -> if (isFocused) { liveBounds[0] = r; if (want != null) cardBounds = r } } }
+                                        val wide = extras[c.key]?.backdrop ?: c.wide
+                                        val card = remember(c, wide) { if (wide == c.wide) c else c.copy(wide = wide) }
+                                        PosterExpandingCard(card, isFocused, isFocused && playing != null && playing == target?.key,
+                                            onB, onF, previewPlayer, isFocused && previewHasFrame)
                                     }
                                 }
                                 shelf.onShowAll?.let { all ->

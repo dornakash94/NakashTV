@@ -38,7 +38,8 @@ class EpgRepository @Inject constructor(
         val next = list.firstOrNull { it.start > n }
         return (cur?.takeIf { !it.isFiller }) to (next?.takeIf { !it.isFiller })
     }
-    suspend fun gridRows(epgIds: List<String>, from: Long, to: Long) = epgDao.rangeMany(epgIds, from, to).groupBy { it.epgChannelId }
+    // Chunked: SQLite on Android 11 and older allows at most 999 variables per query.
+    suspend fun gridRows(epgIds: List<String>, from: Long, to: Long) = epgIds.chunked(900).flatMap { epgDao.rangeMany(it, from, to) }.groupBy { it.epgChannelId }
     suspend fun search(q: String) = epgDao.search(Normalizer.clean(q), now() - 32 * 86400)
 
     /**
@@ -93,9 +94,13 @@ class EpgRepository @Inject constructor(
                         "programme" -> {
                             val e = epg
                             if (e != null && end > start && end > now() - 33 * 86400 && start < now() + 8 * 86400) {
-                                val day = "$e:${start / 86400}"
-                                val counts = perDay.getOrPut(day) { HashMap() }
-                                counts[title] = (counts[title] ?: 0) + 1
+                                // Title counts only for the days filler detection looks at (today ± 1); counting every
+                                // channel × 41 days held millions of strings and could run a TV out of memory.
+                                if (start < now() + 2 * 86400 && end > now() - 86400) {
+                                    val day = "$e:${start / 86400}"
+                                    val counts = perDay.getOrPut(day) { HashMap() }
+                                    counts[title] = (counts[title] ?: 0) + 1
+                                }
                                 batch += EpgEntity("$e:$start", e, start, end, title.trim(), desc.trim(), isFiller = false)
                                 if (batch.size >= 500) { epgDao.insertAll(batch); batch.clear() }
                             }
@@ -115,7 +120,7 @@ class EpgRepository @Inject constructor(
         val n = now()
         val ids = perDay.keys.map { it.substringBefore(':') }.distinct()
         if (ids.isEmpty()) return
-        val rows = epgDao.rangeMany(ids, n - 86400, n + 2 * 86400)
+        val rows = ids.chunked(900).flatMap { epgDao.rangeMany(it, n - 86400, n + 2 * 86400) }
         val flagged = rows.filter { r ->
             val day = "${r.epgChannelId}:${r.start / 86400}"
             val cnt = perDay[day]?.get(r.title) ?: 0

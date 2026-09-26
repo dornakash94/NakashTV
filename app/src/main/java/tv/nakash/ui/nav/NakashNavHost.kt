@@ -103,6 +103,11 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
     val scope = rememberCoroutineScope()
     fun focusNav() { scope.launch { repeat(6) { if (runCatching { navFocus.requestFocus() }.isSuccess) return@launch; kotlinx.coroutines.delay(40) } } }
     val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+    /**
+     * Top-level tabs keep their state: leaving one saves it (rows, focus, loaded data) and coming back restores it,
+     * instead of rebuilding the whole screen and re-reading its catalog on every visit. Home stays at the bottom.
+     */
+    fun goTab(tab: String) = nav.navigate(tab) { launchSingleTop = true; restoreState = true; popUpTo("home") { saveState = true } }
 
     /**
      * Netflix behavior: Back on a top-level screen moves the "cursor" up to the nav bar, onto the current
@@ -114,7 +119,7 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
             route !in Dest.topLevel -> nav.popBackStack()
             !navFocused -> focusNav()
             route == "home" -> exitPrompt = true
-            else -> nav.navigate("home") { launchSingleTop = true; popUpTo("home") { inclusive = true } }
+            else -> goTab("home")
         }
     }
     LaunchedEffect(route) {
@@ -153,7 +158,7 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
         if (!immersive) TopNav(
             current = route, activeFocus = navFocus, floating = overlayNav, onFocusChanged = { navFocused = it },
             // Already on that section: just go back into its content, no reload.
-            onSelect = { if (it.route == route) scope.launch { kotlinx.coroutines.delay(250); runCatching { contentFocus.requestFocus() } } else nav.navigate(it.route) { launchSingleTop = true; popUpTo("home") } },
+            onSelect = { if (it.route == route) scope.launch { kotlinx.coroutines.delay(250); runCatching { contentFocus.requestFocus() } } else goTab(it.route) },
         )
     }
 }

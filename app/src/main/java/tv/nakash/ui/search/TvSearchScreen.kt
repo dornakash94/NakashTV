@@ -50,7 +50,11 @@ internal data class SearchResults(val items:List<SearchTile> = emptyList(),val s
 @javax.inject.Singleton
 class SearchIndex @Inject constructor(catalog:CatalogRepository) {
     private val scope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+Dispatchers.Default)
-    internal val index=combine(catalog.newestMovies(Int.MAX_VALUE),catalog.recentlyUpdatedSeries(Int.MAX_VALUE),catalog.channels()) { movies,series,channels ->
+    // Rebuilt only when something search shows actually changed: opening a title writes its details to the movies
+    // table, which re-runs these queries, but the searchable fields stay equal and nothing is rebuilt.
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    internal val index=combine(catalog.searchMovies().distinctUntilChanged(),catalog.searchSeries().distinctUntilChanged(),catalog.channels().distinctUntilChanged()) { movies,series,channels -> Triple(movies,series,channels) }
+        .debounce(1_000).map { (movies,series,channels) ->
         val tiles=buildList {
             movies.forEach { m -> add(SearchTile(SearchDocument("m${m.id}",m.title,listOfNotNull(m.cast,m.director,m.genres).joinToString(" ")),m.poster,m.year,"סרט",m.id.toString())) }
             series.forEach { s -> add(SearchTile(SearchDocument("s${s.id}",s.title,listOfNotNull(s.cast,s.genres).joinToString(" ")),s.cover,s.year,"סדרה",s.id.toString())) }

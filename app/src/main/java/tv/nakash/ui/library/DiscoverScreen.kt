@@ -92,8 +92,9 @@ private const val CardMs = 320
 @Composable
 fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = hiltViewModel()) {
     val seriesMode = kind == "series"
-    val movies by vm.movies.collectAsState()
-    val series by vm.series.collectAsState()
+    // Only the catalog this tab shows (the other one is thousands of rows held for nothing).
+    val movies by remember(seriesMode) { if (seriesMode) kotlinx.coroutines.flow.flowOf(emptyList()) else vm.movies }.collectAsState(emptyList())
+    val series by remember(seriesMode) { if (seriesMode) vm.series else kotlinx.coroutines.flow.flowOf(emptyList()) }.collectAsState(emptyList())
     val saved by remember(seriesMode) { vm.user.libraryContinueWatching(seriesMode) }.collectAsState(emptyList())
     val categories by remember(kind) { vm.catalog.categories(if (seriesMode) "series" else "vod") }.collectAsState(emptyList())
     val loading by vm.loading.collectAsState()
@@ -142,14 +143,18 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                 if (titles.isNotEmpty()) add(Shelf("new", if (seriesMode) "פרקים חדשים" else "חדש בשירות", titles.take(12)))
                 val rated = titles.filter { (it.rating ?: 0.0) >= 7.0 }.sortedByDescending { it.rating }.take(12)
                 if (rated.isNotEmpty()) add(Shelf("rated", "שווה לראות", rated))
+                // One pass over the titles (each title's category list split once), not one pass per category.
+                val byCategory = HashMap<String, MutableList<ShelfTitle>>()
+                for (t in titles) for (c in t.categories.split(',')) { val l = byCategory.getOrPut(c) { ArrayList(12) }; if (l.size < 12) l += t }
                 categories.forEach { cat ->
-                    val subset = titles.asSequence().filter { cat.id.toString() in it.categories.split(',') }.take(12).toList()
+                    val subset = byCategory[cat.id.toString()].orEmpty()
                     if (subset.isNotEmpty()) add(Shelf("cat${cat.id}", cat.name, subset))
                 }
             }
         }
     }
     val filtered by produceState(emptyList<ShelfTitle>(), selectedCategory, titles, continued, favorites) {
+        if (selectedCategory == null) { value = emptyList(); return@produceState }
         value = withContext(Dispatchers.Default) {
             when (selectedCategory) {
                 "continue" -> continued
@@ -178,7 +183,8 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     }
     suspend fun trailerFor(t: ShelfTitle): String? = extrasFor(t)?.trailerKey
     fun wideOf(t: ShelfTitle): String? = extras[t.id]?.backdrop ?: t.backdrop
-    fun bigOf(t: ShelfTitle): String? = extras[t.id]?.backdrop?.replace("/w1280/", "/original/") ?: t.backdrop ?: t.image
+    // 1280 px is sharp on a 1080p TV; the "original" file is often 4K and several MB (slow to fetch and decode).
+    fun bigOf(t: ShelfTitle): String? = extras[t.id]?.backdrop ?: t.backdrop ?: t.image
     LaunchedEffect(billboard?.id, tmdbKey) { billboard?.let { extrasFor(it) } }
     val billboardImage = billboard?.let { bigOf(it) }
     val billboardColor by produceState(Color(0xFF1B1D22), billboardImage) { value = tv.nakash.ui.components.dominantColor(ctx, billboardImage) ?: value }
@@ -186,14 +192,17 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     var stageOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     var billboardBounds by remember { mutableStateOf<Rect?>(null) }
     var cardBounds by remember { mutableStateOf<Rect?>(null) }
+    // Positions update every frame while cards widen or the page scrolls: kept outside Compose state and copied in
+    // only when a trailer is due (state writes there recomposed the whole screen every frame).
+    val liveBounds = remember { arrayOfNulls<Rect>(2) }   // 0 = billboard, 1 = focused card
     var target by remember { mutableStateOf<TrailerTarget?>(null) }
     var playingKey by remember { mutableStateOf<String?>(null) }
     var wantKey by remember { mutableStateOf<Pair<String, Boolean>?>(null) }     // key, true = billboard
     LaunchedEffect(billboardFocused, focusedId, billboard?.id, tmdbKey, selectedCategory) {
         wantKey = null
         if (selectedCategory != null) return@LaunchedEffect
-        if (billboardFocused) { val b = billboard ?: return@LaunchedEffect; delay(3_000); trailerFor(b)?.let { wantKey = it to true } }
-        else { val t = titles.firstOrNull { it.id == focusedId } ?: return@LaunchedEffect; delay(350); trailerFor(t)?.let { wantKey = it to false } }
+        if (billboardFocused) { val b = billboard ?: return@LaunchedEffect; delay(3_000); trailerFor(b)?.let { billboardBounds = liveBounds[0]; wantKey = it to true } }
+        else { val t = titles.firstOrNull { it.id == focusedId } ?: return@LaunchedEffect; delay(350); trailerFor(t)?.let { cardBounds = liveBounds[1]; wantKey = it to false } }
     }
     target = wantKey?.let { (k, onBillboard) -> (if (onBillboard) billboardBounds else cardBounds)?.let { TrailerTarget(k, it.translate(-stageOrigin), if (onBillboard) 22f else 10f) } }
     val billboardPlaying = target != null && wantKey?.second == true && playingKey == target?.key
@@ -242,8 +251,8 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
         }
         // Background in the billboard's colour, fading to the app background.
         // The billboard's colour, deepening as you scroll (near black by the third row, never plain black).
-        val scrolled by tv.nakash.ui.components.rememberScrolledPx(list)
-        tv.nakash.ui.components.ScrollTintBackground(pageTint, scrolled)
+        val scrolled = tv.nakash.ui.components.rememberScrolledPx(list)
+        tv.nakash.ui.components.ScrollTintBackground(pageTint, { scrolled.value })
         // The one trailer player, behind the content.
         Box(Modifier.fillMaxSize().onGloballyPositioned { stageOrigin = it.positionInRoot() }) {
             TrailerStage(target, onPlaying = { playingKey = it })
@@ -261,7 +270,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                     item(key = "billboard") {
                         billboard?.let { b ->
                             Billboard(b.copy(backdrop = bigOf(b)), seriesMode, billboardH, billboardPlaying, playFocus,
-                                onBounds = { billboardBounds = it },
+                                onBounds = { liveBounds[0] = it; if (wantKey?.second == true) billboardBounds = it },
                                 onFocus = { billboardFocused = true; focusedId = null; focusedShelf = null },
                                 play = { playNow(b) }, info = { open(b) })
                         }
@@ -301,8 +310,9 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                                     rowItemsIndexed(shelf.items, key = { _, it -> it.id }) { i, item ->
                                         val expanded = rowFocused && focusedId == item.id
                                         Box(if (i == 0) Modifier.focusRequester(rowFirst) else Modifier) {
-                                        ExpandingCard(item.copy(backdrop = wideOf(item)), expanded, playingHere = expanded && cardPlaying,
-                                            onBounds = { if (expanded) cardBounds = it },
+                                        val wide = wideOf(item)
+                                        ExpandingCard(remember(item, wide) { if (wide == item.backdrop) item else item.copy(backdrop = wide) }, expanded, playingHere = expanded && cardPlaying,
+                                            onBounds = { if (expanded) { liveBounds[1] = it; if (wantKey?.second == false) cardBounds = it } },
                                             onFocus = { billboardFocused = false; focusedShelf = shelf.key; focusedId = item.id },
                                             click = { open(item) })
                                         }
@@ -419,6 +429,7 @@ private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, playingHere: Bool
 
 private fun prefetch(ctx: android.content.Context, url: String?) {
     url ?: return
-    coil3.SingletonImageLoader.get(ctx).enqueue(coil3.request.ImageRequest.Builder(ctx).data(url).build())
+    // Warms the disk cache only, decoded at card size: an unsized request decodes the full image and evicts what is on screen.
+    coil3.SingletonImageLoader.get(ctx).enqueue(coil3.request.ImageRequest.Builder(ctx).data(url).size(800, 450).memoryCachePolicy(coil3.request.CachePolicy.DISABLED).build())
 }
 

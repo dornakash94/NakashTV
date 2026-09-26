@@ -87,8 +87,26 @@ object TrailerPlayer {
     }
 
     /** First trailer loads the embed page; later ones swap the video inside the same page (no reload). */
+    private val main = Handler(Looper.getMainLooper())
+    private val releaseLater = Runnable { release() }
+    private var parked = false
+
+    /** A screen let go of the player: stop the page's scripts now, free the renderer if nobody takes it within 8 s. */
+    fun park() {
+        pause()
+        val w = web ?: return
+        runCatching { w.onPause(); w.pauseTimers() }
+        parked = true
+        main.removeCallbacks(releaseLater); main.postDelayed(releaseLater, 8_000)
+    }
+    private fun unpark(w: WebView) {
+        main.removeCallbacks(releaseLater)
+        if (parked) { parked = false; runCatching { w.onResume(); w.resumeTimers() } }
+    }
+
     fun load(key: String) {
         val w = web ?: return
+        unpark(w)
         currentKey = key; releasedKey = null
         playing.value = null
         if (!pageReady) {
@@ -106,8 +124,10 @@ object TrailerPlayer {
      */
     fun release() {
         if (Looper.myLooper() != Looper.getMainLooper()) { Handler(Looper.getMainLooper()).post { release() }; return }
+        main.removeCallbacks(releaseLater)
         val w = web ?: return
         if (tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashTrailer", "release webview")
+        if (parked) { parked = false; runCatching { w.resumeTimers() } } // timers are global to all WebViews
         releasedKey = currentKey; currentKey = null
         web = null; pageReady = false; pending = null; playing.value = null
         runCatching { (w.parent as? ViewGroup)?.removeView(w); w.stopLoading(); w.loadUrl("about:blank"); w.destroy() }
@@ -177,7 +197,7 @@ fun TrailerStage(target: TrailerTarget?, modifier: Modifier = Modifier, onPlayin
         if (!ready || web == null) return@LaunchedEffect
         if (target == null) TrailerPlayer.pause() else TrailerPlayer.load(target.key)
     }
-    DisposableEffect(Unit) { onDispose { TrailerPlayer.pause() } }
+    DisposableEffect(Unit) { onDispose { TrailerPlayer.park() } }
 
     val b = lastBounds
     var coverW: Float; var coverH: Float

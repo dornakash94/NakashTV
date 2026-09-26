@@ -296,7 +296,10 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
     val thumbKey=when(val item=req) {is PlayRequest.Movie->"movie:${item.id}";is PlayRequest.Episode->"episode:${item.episodeId}";else->""}
     LaunchedEffect(thumbKey,(scrubMs ?: position)/10_000,st.durationMs,st.isBuffering) {
         val uri=vm.controller.player.currentMediaItem?.localConfiguration?.uri?.toString()
-        if(uri!=null && !st.isBuffering) vm.thumbs.request(thumbKey,uri,(scrubMs ?: position)/1000,st.durationMs/1000)
+        // Only while the user scrubs: extracting frames opens a second connection to the same file and a second
+        // decoder, which slowed the start and caused a rebuffer right after it. Normal playback fills the strip
+        // from the picture on screen (PlaybackFrameCache) at no cost.
+        if(uri!=null && !st.isBuffering && scrubMs!=null) vm.thumbs.request(thumbKey,uri,scrubMs!!/1000,st.durationMs/1000)
     }
     LaunchedEffect(ended) {
         if(ended>0 && req is PlayRequest.Episode && autoNext) {

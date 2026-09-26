@@ -21,10 +21,15 @@ interface ChannelDao {
     @Upsert suspend fun upsertChannels(list: List<ChannelEntity>)
     @Upsert suspend fun upsertSources(list: List<ChannelSourceEntity>)
     @Upsert suspend fun upsertCategories(list: List<CategoryEntity>)
-    @Query("UPDATE channels SET isActive = 0 WHERE id NOT IN (:ids)") suspend fun deactivateMissing(ids: List<Int>)
+    @Query("UPDATE channels SET isActive = 0") suspend fun deactivateAll()
+    /**
+     * Channels missing from the provider's list end up inactive: all are switched off, then the current list is
+     * written back as active (one transaction, so readers never see an empty list). A `NOT IN (:ids)` with ~12k ids
+     * exceeds the 999-variable limit of SQLite on Android 11 and older, which most TV streamers run.
+     */
     @Transaction
     suspend fun replaceLive(cats: List<CategoryEntity>, chans: List<ChannelEntity>, srcs: List<ChannelSourceEntity>) {
-        upsertCategories(cats); upsertChannels(chans); upsertSources(srcs); deactivateMissing(chans.map { it.id })
+        upsertCategories(cats); deactivateAll(); upsertChannels(chans.map { if (it.isActive) it else it.copy(isActive = true) }); upsertSources(srcs)
     }
 }
 
@@ -43,6 +48,9 @@ interface VodDao {
     @Query("SELECT * FROM movies WHERE infoLoaded = 1") suspend fun enrichedMovies(): List<MovieEntity>
     @Query("SELECT * FROM series WHERE detailLoadedAt > 0") suspend fun detailedSeries(): List<SeriesEntity>
     @Query("SELECT * FROM movies ORDER BY added DESC LIMIT :limit") fun newest(limit: Int): Flow<List<MovieEntity>>
+    // Only what search needs (no plots/backdrops): far less to read each time the table changes.
+    @Query("SELECT id, title, year, poster, `cast`, director, genres FROM movies ORDER BY added DESC") fun searchMovies(): Flow<List<MovieSearchRow>>
+    @Query("SELECT id, title, year, cover, `cast`, genres FROM series ORDER BY lastModified DESC") fun searchSeries(): Flow<List<SeriesSearchRow>>
     @Query("SELECT * FROM movies WHERE rating >= 7 AND year >= :minYear ORDER BY rating DESC LIMIT 40") fun topRated(minYear: Int): Flow<List<MovieEntity>>
     @Query("SELECT * FROM movies WHERE (',' || genres || ',') LIKE '%,' || :genre || ',%' ORDER BY added DESC LIMIT 40") fun byGenre(genre: String): Flow<List<MovieEntity>>
     @Query("SELECT * FROM movies WHERE (',' || categoryIds || ',') LIKE '%,' || :categoryId || ',%' ORDER BY added DESC") fun byCategory(categoryId: Int): Flow<List<MovieEntity>>
@@ -86,3 +94,6 @@ interface UserDao {
     @Upsert suspend fun addFavorite(f: FavoriteEntity)
     @Query("DELETE FROM favorites WHERE `key` = :key") suspend fun removeFavorite(key: String)
 }
+
+data class MovieSearchRow(val id: Int, val title: String, val year: Int?, val poster: String?, val cast: String?, val director: String?, val genres: String)
+data class SeriesSearchRow(val id: Int, val title: String, val year: Int?, val cover: String?, val cast: String?, val genres: String)

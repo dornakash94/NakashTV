@@ -54,7 +54,8 @@ object TmdbParser {
 
 /** Links TMDB recommendations to titles that are actually in the provider's library (by title and year). */
 object LibraryMatch {
-    fun key(title: String) = Normalizer.titleWithoutYear(title).lowercase().replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+    private val NON_WORD = Regex("[^\\p{L}\\p{N}]+")
+    fun key(title: String) = Normalizer.titleWithoutYear(title).lowercase().replace(NON_WORD, " ").trim()
     fun <T> match(recs: List<TmdbTitle>, library: List<T>, title: (T) -> String, year: (T) -> Int?): List<T> {
         val byKey = library.groupBy { key(title(it)) }
         return recs.mapNotNull { r ->

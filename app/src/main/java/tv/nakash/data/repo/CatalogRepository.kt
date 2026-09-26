@@ -38,6 +38,8 @@ class CatalogRepository @Inject constructor(
     suspend fun sources(channelId: Int) = channelDao.sources(channelId)
 
     fun newestMovies(limit: Int = 40) = vodDao.newest(limit)
+    fun searchMovies() = vodDao.searchMovies()
+    fun searchSeries() = vodDao.searchSeries()
     fun topRatedMovies() = vodDao.topRated(java.time.Year.now().value - 3)
     fun moviesByGenre(g: String) = vodDao.byGenre(g)
     fun movie(id: Int) = vodDao.movie(id)

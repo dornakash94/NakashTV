@@ -90,7 +90,6 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
     var handoff by remember(id) {mutableStateOf(false)}
     var frame by remember(id) {mutableStateOf(false)}
     var started by remember(id) {mutableStateOf(false)}
-    val playback by vm.player.state.collectAsState()
     var videoView by remember {mutableStateOf<PlayerView?>(null)}
     val heroFocus=remember {FocusRequester()}
     val panelFocus=remember {FocusRequester()}
@@ -107,8 +106,6 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
     var trailerPlaying by remember(id) {mutableStateOf(false)}
     val trailerAlpha by animateFloatAsState(if(trailerPlaying) 1f else 0f,tween(500),label="trailer")
     val trailerKey=tmdb?.trailerKey?.takeUnless {trailerFailed}
-    val allMovies by vm.movies.collectAsState()
-    val allSeries by vm.series.collectAsState()
 
     tv.nakash.ui.components.PlaybackFrameCache(videoView,vm.player,vm.thumbs,active && panel==null && started)
     val menuAlpha by animateFloatAsState(if(menuVisible || panel!=null) 1f else 0f,tween(if(menuVisible) 180 else 850),label="series menu")
@@ -129,11 +126,9 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
             if(!handoff) {vm.thumbs.stop();vm.player.stop()}
         }
     }
-    LaunchedEffect(id,attempt,returnedToMenu) {
-        busy=true;error=null
-        try {
-            if(series) vm.catalog.ensureSeriesDetail(id,attempt>0) else vm.catalog.ensureMovieInfo(id)
-            resume=if(series) vm.user.latestForSeries(id) else vm.user.progress("movie",id.toString())
+    // Where to resume: last episode watched (or the next one once finished), else the first episode. Cheap Room reads.
+    suspend fun refreshResume() {
+        resume=if(series) vm.user.latestForSeries(id) else vm.user.progress("movie",id.toString())
             val allSeasons=if(series) vm.catalog.seasons(id).first() else emptyList()
             excerpt=allSeasons.firstOrNull()?.let {vm.catalog.episodes(id,it.number).first().firstOrNull()}
             var last:EpisodeEntity?=null
@@ -141,21 +136,31 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                 last=vm.catalog.episodes(id,s.number).first().firstOrNull {it.id==resume?.refId}
                 if(last!=null) break
             }
-            chosen=if(last!=null && resume?.completed==true) vm.catalog.nextEpisode(id,last.season,last.number) ?: excerpt else last ?: excerpt
-            if(season==null) season=chosen?.season
-        } catch(cancel:kotlinx.coroutines.CancellationException) {throw cancel}
-        catch(_:Exception) {error="לא הצלחנו לטעון את התוכן. אפשר לנסות שוב."}
+        chosen=if(last!=null && resume?.completed==true) vm.catalog.nextEpisode(id,last.season,last.number) ?: excerpt else last ?: excerpt
+        if(season==null) season=chosen?.season
+    }
+    // The page shows at once from what is already stored; the provider refresh runs behind it with a deadline.
+    // Only a series with no stored episodes waits for it (there is nothing to play yet).
+    LaunchedEffect(id,attempt) {
+        error=null
+        runCatching {refreshResume()}
+        busy=series && chosen==null
+        val ok=runCatching {kotlinx.coroutines.withTimeoutOrNull(12_000) {if(series) vm.catalog.ensureSeriesDetail(id,attempt>0) else vm.catalog.ensureMovieInfo(id)}}
+        runCatching {refreshResume()}
+        if(series && chosen==null && (ok.isFailure || ok.getOrNull()==null)) error="לא הצלחנו לטעון את התוכן. אפשר לנסות שוב."
         busy=false
     }
-    LaunchedEffect(id,busy,tmdbKey) {
-        if(busy || tmdbKey==null) return@LaunchedEffect
-        tmdb=if(series) show?.let {vm.tmdb.tv(it.title,it.year)} else movie?.let {vm.tmdb.movie(it.tmdbId,it.title,it.year)}
+    // TMDB extras in parallel with the provider (title and year are already stored).
+    val tmdbTitle=movie?.title ?: show?.title
+    LaunchedEffect(id,tmdbKey,tmdbTitle!=null) {
+        if(tmdbKey==null || tmdbTitle==null) return@LaunchedEffect
+        tmdb=kotlinx.coroutines.withTimeoutOrNull(15_000) {if(series) show?.let {vm.tmdb.tv(it.title,it.year)} else movie?.let {vm.tmdb.movie(it.tmdbId,it.title,it.year)}}
         tmdbDone=true
     }
-    LaunchedEffect(busy,panel) {
-        delay(180)
-        if(panel==null && !busy) runCatching {heroFocus.requestFocus()}
-        else if(panel!=null) runCatching {panelFocus.requestFocus()}
+    // Focus Play once when the page opens and whenever a panel closes; never pulled back while the user moves.
+    LaunchedEffect(panel) {
+        delay(120)
+        if(panel==null) runCatching {heroFocus.requestFocus()} else runCatching {panelFocus.requestFocus()}
     }
     fun request(e:EpisodeEntity):PlayRequest.Episode {
         val saved=progress.firstOrNull {it.refId==e.id} ?: resume?.takeIf {it.refId==e.id}
@@ -181,8 +186,19 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
             openPlayer()
         }
     }
+    // Warm the stream connection for what Play would start, while the user reads the page.
+    val warmKey=if(series) chosen?.id else movie?.id?.toString()
+    LaunchedEffect(warmKey) {
+        if(series) chosen?.let {vm.player.prewarm(request(it))}
+        else movie?.let {m -> vm.player.prewarm(PlayRequest.Movie(m.id,m.title,m.containerExt,0))}
+    }
     LaunchedEffect(returnedToMenu) {
-        if(returnedToMenu) {menuVisible=true;frame=false;started=false;handoff=false;panel=null}
+        if(returnedToMenu) {
+            menuVisible=true;frame=false;started=false;handoff=false;panel=null
+            detailEntry.savedStateHandle["returnToDetails"]=false
+            runCatching {refreshResume()}
+            runCatching {heroFocus.requestFocus()}
+        }
     }
     // The official trailer plays full screen behind the page (Netflix): 2.5 s after the page settles, only while the
     // main page is showing. No trailer → the still backdrop; never a clip from the movie itself.
@@ -193,8 +209,16 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
         if(trailerKey!=null && panel==null && !fullTrailer && !handoff) {delay(2_500);trailerOn=true}
     }
     val bgAlpha by animateFloatAsState(if(trailerOn && stagePlaying!=null && stagePlaying==trailerKey) 0f else 1f,tween(700),label="detailBg")
-    val similarMovies=if(series) emptyList() else LibraryMatch.match(tmdb?.similar.orEmpty(),allMovies,{it.title},{it.year}).filter {it.id!=id}.take(15)
-    val similarSeries=if(series) LibraryMatch.match(tmdb?.similar.orEmpty(),allSeries,{it.title},{it.year}).filter {it.id!=id}.take(15) else emptyList()
+    val similarLists by produceState(Pair(emptyList<tv.nakash.data.local.MovieEntity>(),emptyList<tv.nakash.data.local.SeriesEntity>()),tmdb) {
+        val recs=tmdb?.similar.orEmpty()
+        if(recs.isEmpty()) return@produceState
+        value=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            if(series) Pair(emptyList(),LibraryMatch.match(recs,vm.catalog.recentlyUpdatedSeries(Int.MAX_VALUE).first(),{it.title},{it.year}).filter {it.id!=id}.take(15))
+            else Pair(LibraryMatch.match(recs,vm.catalog.newestMovies(Int.MAX_VALUE).first(),{it.title},{it.year}).filter {it.id!=id}.take(15),emptyList())
+        }
+    }
+    val similarMovies=similarLists.first
+    val similarSeries=similarLists.second
     val similar=similarMovies.map {SimilarItem("movie/${it.id}",it.title,it.backdrop ?: it.poster,listOfNotNull(it.year?.toString(),it.runtimeMin?.let {m -> "$m דקות"},it.genres.split(',').firstOrNull()?.takeIf {g -> g.isNotBlank()}).joinToString("  ·  "),it.plot)} +
         similarSeries.map {SimilarItem("seriesDetail/${it.id}",it.title,it.backdrop ?: it.cover,listOfNotNull(it.year?.toString(),it.genres.split(',').firstOrNull()?.takeIf {g -> g.isNotBlank()}).joinToString("  ·  "),it.plot)}
     val title=movie?.title ?: show?.title ?: "טוענים…"
@@ -205,11 +229,11 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
         val density=androidx.compose.ui.platform.LocalDensity.current
         val screen=with(density) {androidx.compose.ui.geometry.Rect(0f,0f,maxWidth.toPx(),maxHeight.toPx())}
         tv.nakash.ui.components.TrailerStage(if(trailerOn && trailerKey!=null) tv.nakash.ui.components.TrailerTarget(trailerKey,screen,0f) else null,onPlaying={stagePlaying=it})
-        AsyncImage(tmdb?.backdrop?.replace("/w1280/","/original/") ?: movie?.backdrop ?: show?.backdrop ?: movie?.poster ?: show?.cover,null,Modifier.fillMaxSize().graphicsLayer {alpha=bgAlpha},contentScale=ContentScale.Crop)
+        DetailBackdrop(tmdb?.backdrop ?: movie?.backdrop ?: show?.backdrop ?: movie?.poster ?: show?.cover,Modifier.fillMaxSize().graphicsLayer {alpha=bgAlpha})
         // Text side (right, RTL) darkened; the rest of the picture stays clear.
         Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color.Transparent,.40f to Color.Transparent,.72f to Color.Black.copy(alpha=.62f),1f to Color.Black.copy(alpha=.86f))))
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.6f to Color.Transparent,1f to Color.Black.copy(alpha=.55f))))
-        if(panel==null) Column(Modifier.align(Alignment.CenterStart).fillMaxWidth(.44f).padding(start=56.dp,end=8.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+        if(panel==null) Column(Modifier.align(Alignment.TopStart).fillMaxWidth(.44f).padding(start=56.dp,end=8.dp,top=96.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
             Text(title,style=MaterialTheme.typography.displayLarge.copy(fontSize=46.sp,lineHeight=52.sp),maxLines=2,overflow=TextOverflow.Ellipsis)
             Text(meta,color=Color.White.copy(alpha=.85f),style=MaterialTheme.typography.titleLarge.copy(fontSize=17.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
             Text((movie?.plot ?: show?.plot)?.takeIf {it.isNotBlank()} ?: tmdb?.overview ?: "",style=MaterialTheme.typography.bodyLarge.copy(fontSize=17.sp,lineHeight=24.sp),maxLines=3,overflow=TextOverflow.Ellipsis)
@@ -232,7 +256,6 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                 DetailMenuItem(if(favorite) androidx.compose.material.icons.Icons.Filled.Check else androidx.compose.material.icons.Icons.Filled.Add,if(favorite) "ברשימה שלי" else "הוסף לרשימה שלי",{scope.launch {vm.user.toggleFavorite(if(series) "series" else "movie",id.toString())}})
                 DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Info,"פרטים ושחקנים",{panel="details"})
             }
-            if(busy) Text("טוענים…",color=NakashColors.Muted)
             error?.let {Text(it,color=NakashColors.Live);Action("ניסיון נוסף",{attempt++})}
             if(series && !busy && error==null && chosen==null) Text("אין פרקים זמינים כרגע",color=NakashColors.Muted)
         }
@@ -266,9 +289,6 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                             }
                         }
                         else (movie?.cast ?: show?.cast)?.takeIf {it.isNotBlank()}?.let {cast -> item {Text("בהשתתפות: $cast",color=NakashColors.Muted)}}
-                        val recs=tmdb?.similar.orEmpty()
-                        val similarMovies=if(series) emptyList() else LibraryMatch.match(recs,allMovies,{it.title},{it.year}).filter {it.id!=id}.take(15)
-                        val similarSeries=if(series) LibraryMatch.match(recs,allSeries,{it.title},{it.year}).filter {it.id!=id}.take(15) else emptyList()
                         if(similarMovies.isNotEmpty() || similarSeries.isNotEmpty()) item {
                             Column(verticalArrangement=Arrangement.spacedBy(10.dp)) {
                                 Text(if(series) "סדרות דומות" else "סרטים דומים",style=MaterialTheme.typography.titleLarge)
@@ -390,5 +410,25 @@ private fun CinematicAction(label:String,click:()->Unit,modifier:Modifier=Modifi
             Box(Modifier.width(3.dp).height(24.dp).background(if(focused) Color.White else Color.Transparent))
             Text(label,color=if(enabled) Color.White else NakashColors.Muted,style=MaterialTheme.typography.titleLarge.copy(fontSize=20.sp))
         }
+    }
+}
+
+
+/**
+ * The page backdrop. Keeps showing the picture it has while a better one (TMDB) loads, then crossfades to it, so the
+ * page never flashes black; decoded at screen size.
+ */
+@Composable
+private fun DetailBackdrop(url:String?,modifier:Modifier) {
+    var shown by remember {mutableStateOf(url)}
+    val ctx=androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(url) {
+        if(url==null || url==shown) return@LaunchedEffect
+        if(shown==null) {shown=url;return@LaunchedEffect}
+        val r=coil3.SingletonImageLoader.get(ctx).execute(coil3.request.ImageRequest.Builder(ctx).data(url).size(1920,1080).build())
+        if(r is coil3.request.SuccessResult) shown=url
+    }
+    androidx.compose.animation.Crossfade(shown,modifier,animationSpec=tween(450),label="backdrop") {u ->
+        if(u!=null) AsyncImage(coil3.request.ImageRequest.Builder(ctx).data(u).size(1920,1080).build(),null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
     }
 }

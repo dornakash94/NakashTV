@@ -16,6 +16,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
@@ -42,27 +43,29 @@ fun rememberScrolledPx(list: LazyListState): State<Float> {
 /**
  * The page background: a gradient in [tint] that deepens gradually as you scroll and is close to black by about the
  * third row, but always keeps a trace of the colour (never a plain black gradient).
+ * [scrolledPx] is read only while drawing, so scrolling redraws this layer instead of recomposing the page.
  */
 @Composable
-fun ScrollTintBackground(tint: Color, scrolledPx: Float, modifier: Modifier = Modifier) {
-    val color by animateColorAsState(tint, tween(900), label = "tint")
-    val density = LocalDensity.current
-    val fadePx = with(density) { 1100.dp.toPx() }
-    // Follows the scroll itself (which is already animated), so it never lags behind the content.
-    val p = (scrolledPx / fadePx).coerceIn(0f, 1f)
-    val strength = 1f - .75f * (p * p * (3f - 2f * p))          // smoothstep: eases in and out
-    Box(modifier.fillMaxSize().background(Color.Black))
-    // The colour belongs to the top of the page: it drifts up with the content (slower, parallax) as it deepens.
-    androidx.compose.foundation.layout.BoxWithConstraints(modifier.fillMaxSize()) {
-        val h = maxHeight * 1.6f
-        val shift = with(density) { (scrolledPx * .45f).toDp() }.coerceAtMost(maxHeight * .6f)
-        Box(Modifier.fillMaxWidth().height(h).offset(y = -shift).background(Brush.verticalGradient(
-            0f to lerp(Color.Black, lerp(color, Color.Black, .25f), strength),
-            .35f to lerp(Color.Black, lerp(color, Color.Black, .55f), strength),
-            .70f to lerp(Color.Black, lerp(color, Color.Black, .82f), strength),
-            1f to lerp(Color.Black, lerp(color, Color.Black, .92f), strength),
-        )))
-    }
+fun ScrollTintBackground(tint: Color, scrolledPx: () -> Float, modifier: Modifier = Modifier) {
+    val color = animateColorAsState(tint, tween(900), label = "tint")
+    val fadePx = with(LocalDensity.current) { 1100.dp.toPx() }
+    Box(modifier.fillMaxSize().drawBehind {
+        drawRect(Color.Black)
+        val scrolled = scrolledPx()
+        val p = (scrolled / fadePx).coerceIn(0f, 1f)
+        val strength = 1f - .75f * (p * p * (3f - 2f * p))          // smoothstep: eases in and out
+        // The colour belongs to the top of the page: it drifts up with the content (slower, parallax) as it deepens.
+        val h = size.height * 1.6f
+        val shift = (scrolled * .45f).coerceAtMost(size.height * .6f)
+        val c = color.value
+        drawRect(Brush.verticalGradient(
+            0f to lerp(Color.Black, lerp(c, Color.Black, .25f), strength),
+            .35f to lerp(Color.Black, lerp(c, Color.Black, .55f), strength),
+            .70f to lerp(Color.Black, lerp(c, Color.Black, .82f), strength),
+            1f to lerp(Color.Black, lerp(c, Color.Black, .92f), strength),
+            startY = -shift, endY = h - shift,
+        ), topLeft = androidx.compose.ui.geometry.Offset(0f, -shift), size = androidx.compose.ui.geometry.Size(size.width, h))
+    })
 }
 
 /** A dark, saturated tone from an image, for page backgrounds. */

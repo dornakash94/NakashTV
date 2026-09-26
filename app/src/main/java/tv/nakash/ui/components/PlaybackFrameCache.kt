@@ -22,7 +22,6 @@ fun PlaybackFrameCache(view:PlayerView?,controller:PlayerController,thumbs:Thumb
             val seconds=player.currentPosition/1000
             if(player.videoSize.width>0 && player.isPlaying) {
                 thumbs.capture(view,key,seconds)
-                player.currentMediaItem?.localConfiguration?.uri?.toString()?.let {thumbs.request(key,it,seconds,player.duration/1000)}
             }
             delay(2_000)
         }

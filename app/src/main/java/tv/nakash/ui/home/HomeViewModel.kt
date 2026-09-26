@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
@@ -61,13 +62,17 @@ class HomeViewModel @Inject constructor(
     }
 
     private val extras = combine(myList, hasFavChannels) { list, hasFavs -> list to hasFavs }
+    // Sport = category 30, kids/docs = Israel (category 1) by name: read those categories only, never all ~12k channels.
+    private val themed = combine(catalog.channelsInCategory(30), catalog.channelsInCategory(1)) { sportAll, israel ->
+        Triple(sportAll.take(16),
+            israel.asSequence().filter { kidsPattern.containsMatchIn(it.displayName) }.take(24).toList(),
+            israel.asSequence().filter { docsPattern.containsMatchIn(it.displayName) }.take(24).toList())
+    }.distinctUntilChanged()
     val rows: StateFlow<List<HomeRow>> = combine(
-        user.continueWatching(), favChannels, catalog.newestMovies(24), catalog.recentlyUpdatedSeries(24), combine(catalog.channels(), extras) { a, b -> a to b },
-    ) { cont, favs, movies, series, (all, extra) ->
+        user.continueWatching(), favChannels, catalog.newestMovies(24), catalog.recentlyUpdatedSeries(24), combine(themed, extras) { a, b -> a to b },
+    ) { cont, favs, movies, series, (themedRows, extra) ->
         val (mine, hasFavs) = extra
-        val sport = all.filter { "30" in it.categoryIds.split(",") }.take(16)
-        val kids = all.asSequence().filter { "1" in it.categoryIds.split(",") && kidsPattern.containsMatchIn(it.displayName) }.take(24).toList()
-        val docs = all.asSequence().filter { "1" in it.categoryIds.split(",") && docsPattern.containsMatchIn(it.displayName) }.take(24).toList()
+        val (sport, kids, docs) = themedRows
         buildList {
             val seenSeries=mutableSetOf<Int>()
             var hasChannel=false
@@ -88,7 +93,7 @@ class HomeViewModel @Inject constructor(
             if (kids.isNotEmpty()) add(HomeRow("kids", "ילדים", items = kids))
             if (docs.isNotEmpty()) add(HomeRow("docs", "דוקו וטבע", items = docs))
         }
-    }.flowOn(kotlinx.coroutines.Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    }.distinctUntilChanged().flowOn(kotlinx.coroutines.Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** now/next per channel, refreshed lazily on focus and every minute for visible channels. */
     val nowMap = MutableStateFlow<Map<String, EpgEntity>>(emptyMap())
@@ -96,7 +101,8 @@ class HomeViewModel @Inject constructor(
         val time=System.currentTimeMillis()/1000
         val ids=channels.mapNotNull { it.epgChannelId }.distinct().take(100)
         val rows=epg.gridRows(ids,time,time+1)
-        nowMap.value=rows.mapNotNull { (id,programs) -> programs.firstOrNull { !it.isFiller }?.let { id to it } }.toMap()
+        val next=rows.mapNotNull { (id,programs) -> programs.firstOrNull { !it.isFiller }?.let { id to it } }.toMap()
+        if(next!=nowMap.value) nowMap.value=next
     }
 
     private val _hero = MutableStateFlow<HeroItem?>(null)

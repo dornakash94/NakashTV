@@ -110,7 +110,9 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
         "channel" -> playerVm.playChannelId(item.progress.refId.toInt()) { nav.navigate("player") }
         else -> Unit
     }
-    val shelves = rows.filter { it.items.isNotEmpty() }.map { row ->
+    // Built only when the rows or the now-playing data change, not on every focus or preview frame.
+    val nowMinute = nowSec / 60
+    val shelves = remember(rows, nowMap, nowMinute) { rows.filter { it.items.isNotEmpty() }.map { row ->
         tv.nakash.ui.components.RowShelf(row.key, row.title, row.subtitle, row.items.map { item ->
             when (item) {
                 is ChannelEntity -> {
@@ -136,7 +138,7 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
                 else -> tv.nakash.ui.components.RowCard(keyOf(item), tv.nakash.ui.components.CardKind.WIDE, "", onClick = {})
             }
         })
-    }
+    } }
     Box(Modifier.fillMaxSize()) {
         if (rows.all { it.items.isEmpty() }) Column(Modifier.padding(top = 90.dp, start = 40.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("ברוכים הבאים ל־NakashTV", style = MaterialTheme.typography.headlineMedium)
@@ -246,10 +248,11 @@ private fun ContinueCard(item: ContinueItem, onFocus: () -> Unit, onClick: () ->
 /** Small entry-point VM so screens can start playback without holding the controller directly. */
 @dagger.hilt.android.lifecycle.HiltViewModel
 class PlayerEntry @Inject constructor(private val controller: PlayerController, private val catalog: tv.nakash.data.repo.CatalogRepository) : androidx.lifecycle.ViewModel() {
-    fun play(req: PlayRequest) = viewModelScope.launch { if(req is PlayRequest.Live) controller.zapChannels.value=catalog.channels().first();controller.play(req) }
+    // Playback starts first; the zap list (every channel) is read afterwards, off the critical path.
+    fun play(req: PlayRequest) { controller.play(req); if(req is PlayRequest.Live) viewModelScope.launch { controller.zapChannels.value=catalog.channels().first() } }
     fun playChannelId(id: Int, then: () -> Unit) = viewModelScope.launch {
-        controller.zapChannels.value=catalog.channels().first()
         catalog.channel(id)?.let { controller.play(PlayRequest.Live(it)); then() }
+        controller.zapChannels.value=catalog.channels().first()
     }
 }
 

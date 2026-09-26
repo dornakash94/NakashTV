@@ -68,7 +68,7 @@ class PlayerController @Inject constructor(
     private val user: UserRepository,
     private val preview: PreviewPlayer,
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state
     val zapChannels = MutableStateFlow<List<ChannelEntity>>(emptyList())
@@ -84,16 +84,50 @@ class PlayerController @Inject constructor(
     /** A notice for the next state (play() rebuilds the state, so a toast set right before it would be lost). */
     private var pendingToast: String? = null
 
+    // Same interceptors (fixed User-Agent, auth), but its own request queue: catalog/EPG sync and image loads on
+    // the shared client (5 requests per host) could hold the video's requests back. A dead route fails fast.
+    private val videoClient: OkHttpClient by lazy { okHttp.newBuilder()
+        .dispatcher(okhttp3.Dispatcher().apply { maxRequests = 32; maxRequestsPerHost = 16 })
+        .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+        .apply { if (tv.nakash.BuildConfig.DEBUG) addNetworkInterceptor { chain ->
+            // Debug builds only: host, status, range and timing of each video request (never the path: it holds the login).
+            val t0 = System.nanoTime(); val r = chain.request(); val resp = chain.proceed(r)
+            android.util.Log.i("NakashNet", "${r.url.scheme}://${r.url.host} ${resp.code} range=${r.header("Range")} ${(System.nanoTime() - t0) / 1_000_000}ms redirect=${resp.header("Location")?.let { java.net.URI(it).host }} len=${resp.header("Content-Length")}")
+            resp
+        } }
+        .build() }
+
+    /**
+     * Called when a title page opens: opens the connections to the provider and its playback server ahead of the Play
+     * press (they stay pooled for minutes), so the stream's first requests skip the connection and TLS setup. Reads one
+     * byte. (Reusing the redirect target itself is not safe: the provider's playback URL is tied to the request.)
+     */
+    fun prewarm(req: PlayRequest) {
+        val url = when (req) {
+            is PlayRequest.Movie -> api.urls().movie(req.id, req.ext)
+            is PlayRequest.Episode -> api.urls().episode(req.episodeId, req.ext)
+            else -> return
+        }
+        scope.launch(Dispatchers.IO) {
+            runCatching { videoClient.newCall(okhttp3.Request.Builder().url(url).header("Range", "bytes=0-0").build()).execute().close() }
+        }
+    }
+
     private fun build(): ExoPlayer {
-        val dsf = OkHttpDataSource.Factory(okHttp) // carries the fixed User-Agent + auth interceptor
+        val dsf = OkHttpDataSource.Factory(videoClient)
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(15_000, 30_000, 750, 1_500) // fast zapping: start after 1.5s
             .setPrioritizeTimeOverSizeThresholds(true).build()
-        return ExoPlayer.Builder(ctx)
+        // Decoder fallback: if the TV's first decoder for a format fails to start, try the next one instead of an error.
+        val renderers = androidx.media3.exoplayer.DefaultRenderersFactory(ctx).setEnableDecoderFallback(true)
+        return ExoPlayer.Builder(ctx, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dsf))
             .setLoadControl(loadControl)
             .setHandleAudioBecomingNoisy(true)
             .build().also { p ->
+                // Resume and seeks land on the nearest keyframe: no downloading and decoding up to a whole GOP
+                // (several seconds of video on IPTV streams) before the first picture.
+                p.setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
                 p.addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         _state.update { it.copy(isPlaying = isPlaying) }
@@ -305,3 +339,5 @@ class PlayerController @Inject constructor(
         _ended.value = System.currentTimeMillis()
     }
 }
+
+

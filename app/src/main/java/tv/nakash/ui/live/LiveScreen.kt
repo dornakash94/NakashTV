@@ -121,7 +121,8 @@ class LiveViewModel @Inject constructor(
         focusJob?.cancel()
         focusJob=viewModelScope.launch {
             var pair=epg.nowAndNext(c.epgChannelId)
-            now.update { it+(c.id to pair.first) };next.value=pair.second
+            // Written only when it changed: every write rebuilds the channel rows.
+            now.update { if(it.containsKey(c.id) && it[c.id]==pair.first) it else it+(c.id to pair.first) };next.value=pair.second
             if(c.hasEpg && c.epgChannelId!=null && pair.first==null) {
                 delay(350)
                 epg.refreshShort(c.id,c.epgChannelId,c.displayName)
@@ -134,7 +135,8 @@ class LiveViewModel @Inject constructor(
         val sample=list.take(90)
         val time=System.currentTimeMillis()/1000
         val rows=epg.gridRows(sample.mapNotNull { it.epgChannelId },time,time+1)
-        now.update { old -> old+sample.associate { c -> c.id to rows[c.epgChannelId]?.firstOrNull()?.takeUnless { it.isFiller } } }
+        val fresh=sample.associate { c -> c.id to rows[c.epgChannelId]?.firstOrNull()?.takeUnless { it.isFiller } }
+        now.update { old -> if(fresh.all { (k,v) -> old.containsKey(k) && old[k]==v }) old else old+fresh }
     }
     fun stopPreview() { focusJob?.cancel();preview.stop(this) }
     fun context(c: ChannelEntity) = viewModelScope.launch { sources.value = catalog.sources(c.id) }
@@ -194,13 +196,20 @@ fun LiveScreen(nav: NavHostController, vm: LiveViewModel = hiltViewModel()) {
         val code=event.nativeKeyEvent.keyCode
         if(event.type==KeyEventType.KeyDown && code in 7..16) { digits=(digits+(code-7)).takeLast(4);true } else false
     }) {
-        val rows=shelves.map { shelf -> tv.nakash.ui.components.RowShelf("live${shelf.id}",shelf.title,cards=shelf.channels.map { c ->
+        // The cards are built when the channels or their programmes change, not on every move of the focus; only the
+        // focused card is replaced (with "next" added), so the rest keep their objects and skip recomposition.
+        val baseRows=remember(shelves,now,clock) { shelves.map { shelf -> tv.nakash.ui.components.RowShelf("live${shelf.id}",shelf.title,cards=shelf.channels.map { c ->
             val p=now[c.id]
             tv.nakash.ui.components.RowCard("c${c.id}",tv.nakash.ui.components.CardKind.CHANNEL,c.displayName,channel=c,nowTitle=p?.title,
-                meta=listOfNotNull("ערוץ ${c.number}",p?.let { "${fmtTime(it.start)}–${fmtTime(it.end)}" },next?.takeIf { focused?.id==c.id }?.let { "הבא: ${it.title}" }).joinToString("  ·  "),plot=p?.description,
+                meta=listOfNotNull("ערוץ ${c.number}",p?.let { "${fmtTime(it.start)}–${fmtTime(it.end)}" }).joinToString("  ·  "),plot=p?.description,
                 progress=p?.takeIf { it.end>it.start }?.let { ((clock-it.start).toFloat()/(it.end-it.start)).coerceIn(0f,1f) },
                 onFocus={vm.focus(c)},onClick={play(c,category=shelf.id)},onLongClick={context=c;contextCategory=shelf.id;vm.context(c)})
-        },onShowAll={vm.selected.value=shelf.id}) }
+        },onShowAll={vm.selected.value=shelf.id}) } }
+        val focusedKey=focused?.let { "c${it.id}" }
+        val rows=remember(baseRows,focusedKey,next) {
+            val n=next ?: return@remember baseRows
+            baseRows.map { shelf -> if(shelf.cards.none { it.key==focusedKey }) shelf else shelf.copy(cards=shelf.cards.map { if(it.key==focusedKey) it.copy(meta=it.meta+"  ·  הבא: ${n.title}") else it }) }
+        }
         tv.nakash.ui.components.NetflixRowsPage(rows,vm.previewPlayer,hasFrame,gridFocus,restoreKey="live")
         if(digits.isNotEmpty()) Text(digits,Modifier.align(Alignment.TopStart).padding(top=64.dp,start=24.dp).background(NakashColors.S1.copy(alpha=.92f),RoundedCornerShape(9.dp)).padding(horizontal=16.dp,vertical=7.dp),style=MaterialTheme.typography.titleLarge.copy(fontSize=20.sp))
     }
