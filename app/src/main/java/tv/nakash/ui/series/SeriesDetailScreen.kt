@@ -233,14 +233,27 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
         // Text side (right, RTL) darkened; the rest of the picture stays clear.
         Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color.Transparent,.40f to Color.Transparent,.72f to Color.Black.copy(alpha=.62f),1f to Color.Black.copy(alpha=.86f))))
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.6f to Color.Transparent,1f to Color.Black.copy(alpha=.55f))))
-        if(panel==null) Column(Modifier.align(Alignment.TopStart).fillMaxWidth(.44f).padding(start=56.dp,end=8.dp,top=96.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-            Text(title,style=MaterialTheme.typography.displayLarge.copy(fontSize=46.sp,lineHeight=52.sp),maxLines=2,overflow=TextOverflow.Ellipsis)
-            Text(meta,color=Color.White.copy(alpha=.85f),style=MaterialTheme.typography.titleLarge.copy(fontSize=17.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
-            Text((movie?.plot ?: show?.plot)?.takeIf {it.isNotBlank()} ?: tmdb?.overview ?: "",style=MaterialTheme.typography.bodyLarge.copy(fontSize=17.sp,lineHeight=24.sp),maxLines=3,overflow=TextOverflow.Ellipsis)
-            val castNames=tmdb?.cast?.take(3)?.map {it.name}?.takeIf {it.isNotEmpty()} ?: (movie?.cast ?: show?.cast)?.split(',')?.map {it.trim()}?.filter {it.isNotEmpty()}?.take(3).orEmpty()
-            if(castNames.isNotEmpty()) Text("בהשתתפות: "+castNames.joinToString(", "),color=Color.White.copy(alpha=.72f),style=MaterialTheme.typography.bodyLarge.copy(fontSize=15.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
-            movie?.director?.takeIf {it.isNotBlank() && it.split(',').size<=2}?.let {Text("במאי: $it",color=Color.White.copy(alpha=.72f),style=MaterialTheme.typography.bodyLarge.copy(fontSize=15.sp),maxLines=1,overflow=TextOverflow.Ellipsis)}
-            Spacer(Modifier.height(8.dp))
+        // Two fixed regions: the menu at the bottom, sized for every button it can have (so it is always fully on
+        // screen and Play keeps its place when "טריילר"/"כותרים דומים" arrive), and the text above it, fitted to the
+        // space that is left: a long title or plot gets a smaller size / fewer lines instead of pushing the menu away.
+        if(panel==null) Column(Modifier.align(Alignment.TopStart).fillMaxHeight().fillMaxWidth(.44f).padding(start=56.dp,end=8.dp,top=24.dp,bottom=28.dp)) {
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val avail=maxHeight
+                val roomy=avail>=290.dp
+                val medium=!roomy && avail>=220.dp
+                val titleStyle=MaterialTheme.typography.displayLarge.copy(fontSize=if(roomy) 46.sp else if(medium) 38.sp else 34.sp,lineHeight=if(roomy) 52.sp else if(medium) 44.sp else 40.sp)
+                Column(Modifier.align(Alignment.BottomStart),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Text(title,style=titleStyle,maxLines=if(roomy || medium) 2 else 1,overflow=TextOverflow.Ellipsis)
+                    Text(meta,color=Color.White.copy(alpha=.85f),style=MaterialTheme.typography.titleLarge.copy(fontSize=17.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
+                    Text((movie?.plot ?: show?.plot)?.takeIf {it.isNotBlank()} ?: tmdb?.overview ?: "",style=MaterialTheme.typography.bodyLarge.copy(fontSize=17.sp,lineHeight=24.sp),maxLines=if(roomy) 3 else 2,overflow=TextOverflow.Ellipsis)
+                    val castNames=tmdb?.cast?.take(3)?.map {it.name}?.takeIf {it.isNotEmpty()} ?: (movie?.cast ?: show?.cast)?.split(',')?.map {it.trim()}?.filter {it.isNotEmpty()}?.take(3).orEmpty()
+                    if(castNames.isNotEmpty()) Text("בהשתתפות: "+castNames.joinToString(", "),color=Color.White.copy(alpha=.72f),style=MaterialTheme.typography.bodyLarge.copy(fontSize=15.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
+                    if(roomy) movie?.director?.takeIf {it.isNotBlank() && it.split(',').size<=2}?.let {Text("במאי: $it",color=Color.White.copy(alpha=.72f),style=MaterialTheme.typography.bodyLarge.copy(fontSize=15.sp),maxLines=1,overflow=TextOverflow.Ellipsis)}
+                    error?.let {Text(it,color=NakashColors.Live);Action("ניסיון נוסף",{attempt++})}
+                    if(series && !busy && error==null && chosen==null) Text("אין פרקים זמינים כרגע",color=NakashColors.Muted)
+                }
+            }
+            Spacer(Modifier.height(14.dp))
             val savedPosition=if(series) (progress.firstOrNull {it.refId==chosen?.id} ?: resume?.takeIf {it.refId==chosen?.id}) else resume
             val canResume=savedPosition!=null && !savedPosition.completed && savedPosition.positionMs>0
             val playLabel=when {
@@ -248,7 +261,8 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                 canResume -> "המשך צפייה · נותרו ${((savedPosition!!.durationMs-savedPosition.positionMs).coerceAtLeast(0)/60000)} דק׳"
                 else -> "הפעל"
             }
-            Column(Modifier.width(400.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+            val slots=if(series) 6 else 5
+            Column(Modifier.width(400.dp).height(MenuRowH*slots+MenuGap*(slots-1)),verticalArrangement=Arrangement.spacedBy(MenuGap)) {
                 DetailMenuItem(androidx.compose.material.icons.Icons.Filled.PlayArrow,playLabel,::playChosen,Modifier.focusRequester(heroFocus),enabled=chosen!=null || movie!=null)
                 if(trailerKey!=null) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Theaters,"טריילר",{fullTrailer=true})
                 if(series) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.VideoLibrary,"פרקים נוספים",{panel="episodes"})
@@ -256,8 +270,6 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                 DetailMenuItem(if(favorite) androidx.compose.material.icons.Icons.Filled.Check else androidx.compose.material.icons.Icons.Filled.Add,if(favorite) "ברשימה שלי" else "הוסף לרשימה שלי",{scope.launch {vm.user.toggleFavorite(if(series) "series" else "movie",id.toString())}})
                 DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Info,"פרטים ושחקנים",{panel="details"})
             }
-            error?.let {Text(it,color=NakashColors.Live);Action("ניסיון נוסף",{attempt++})}
-            if(series && !busy && error==null && chosen==null) Text("אין פרקים זמינים כרגע",color=NakashColors.Muted)
         }
         if(panel=="similar") SimilarPanel(title,meta,similar,panelFocus) {nav.navigate(it)}
         if(fullTrailer && trailerKey!=null) FullTrailer(trailerKey,{fullTrailer=false;interaction++},{trailerFailed=true})
@@ -352,9 +364,12 @@ private fun FullTrailer(key:String,close:()->Unit,failed:()->Unit) {
 private data class SimilarItem(val route:String,val title:String,val image:String?,val meta:String,val plot:String?)
 
 /** Netflix-style menu line: icon and label; the focused one becomes a white pill. */
+private val MenuRowH=46.dp
+private val MenuGap=2.dp
+
 @Composable
 private fun DetailMenuItem(icon:androidx.compose.ui.graphics.vector.ImageVector,label:String,click:()->Unit,modifier:Modifier=Modifier,enabled:Boolean=true) {
-    Surface(onClick=click,enabled=enabled,modifier=modifier.fillMaxWidth().height(50.dp),
+    Surface(onClick=click,enabled=enabled,modifier=modifier.fillMaxWidth().height(MenuRowH),
         shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(25.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1.02f),
         colors=ClickableSurfaceDefaults.colors(containerColor=Color.Transparent,focusedContainerColor=Color.White,contentColor=Color.White,focusedContentColor=Color.Black,disabledContainerColor=Color.Transparent,disabledContentColor=NakashColors.Muted)) {
         Row(Modifier.fillMaxSize().padding(horizontal=18.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
