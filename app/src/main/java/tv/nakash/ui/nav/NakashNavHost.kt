@@ -1,3 +1,4 @@
+@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 package tv.nakash.ui.nav
 
 import androidx.activity.compose.BackHandler
@@ -39,6 +40,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -97,6 +101,7 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
     val immersive = fullscreen || route.startsWith("movie/") || route.startsWith("seriesDetail/")
     val overlayNav = route in Dest.heroRoutes
     val contentFocus = remember { FocusRequester() }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val navFocus = remember { FocusRequester() }        // the nav item of the current section
     var navFocused by remember { mutableStateOf(false) }
     var exitPrompt by remember { mutableStateOf(false) }
@@ -157,6 +162,8 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
         } } }
         if (!immersive) TopNav(
             current = route, activeFocus = navFocus, floating = overlayNav, onFocusChanged = { navFocused = it },
+            // The card right under the bar (the row you see at the top); if nothing is found there, anywhere in the page.
+            onDown = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) || runCatching { contentFocus.requestFocus() }.isSuccess },
             // Already on that section: just go back into its content, no reload.
             onSelect = { if (it.route == route) scope.launch { kotlinx.coroutines.delay(250); runCatching { contentFocus.requestFocus() } } else goTab(it.route) },
         )
@@ -169,12 +176,15 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
  * a solid white pill with black text. The bar always sits on a soft top-down fade so it reads on any image.
  */
 @Composable
-fun TopNav(current: String, activeFocus: FocusRequester, floating: Boolean, onFocusChanged: (Boolean) -> Unit, onSelect: (Dest) -> Unit) {
+fun TopNav(current: String, activeFocus: FocusRequester, floating: Boolean, onFocusChanged: (Boolean) -> Unit, onDown: () -> Boolean, onSelect: (Dest) -> Unit) {
     val fade = Brush.verticalGradient(0f to NakashColors.Bg.copy(alpha = if (floating) .92f else 1f), .6f to NakashColors.Bg.copy(alpha = if (floating) .5f else 1f), 1f to Color.Transparent)
     Box(Modifier.fillMaxWidth().height(NavBarHeight + if (floating) 40.dp else 12.dp).background(fade)) {
         Row(
             Modifier.fillMaxWidth().height(NavBarHeight).padding(horizontal = 26.dp)
-                .onFocusChanged { onFocusChanged(it.hasFocus) }.focusGroup(),
+                .onFocusChanged { onFocusChanged(it.hasFocus) }
+                // ▼ always leads back down into the page (the bar floats over it, so a geometric search could miss it).
+                .onPreviewKeyEvent { if (it.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && it.key == androidx.compose.ui.input.key.Key.DirectionDown) onDown() else false }
+                .focusGroup(),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
         ) {
             Dest.all.forEach { d ->
