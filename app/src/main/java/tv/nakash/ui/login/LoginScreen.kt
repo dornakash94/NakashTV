@@ -93,7 +93,7 @@ fun LoginScreen(vm: LoginViewModel = hiltViewModel()) {
     val status by vm.status.collectAsState()
     val busy by vm.busy.collectAsState()
     val initialFocus = remember { androidx.compose.ui.focus.FocusRequester() }
-    androidx.compose.runtime.LaunchedEffect(Unit) { initialFocus.requestFocus() }
+    androidx.compose.runtime.LaunchedEffect(Unit) { runCatching{initialFocus.requestFocus()} }
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val submit = {

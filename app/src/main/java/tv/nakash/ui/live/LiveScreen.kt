@@ -172,6 +172,7 @@ fun LiveScreen(nav: NavHostController, vm: LiveViewModel = hiltViewModel()) {
     val focused by vm.focused.collectAsState()
     val next by vm.next.collectAsState()
     val gridFocus=remember { FocusRequester() }
+    var lastChannel by androidx.compose.runtime.saveable.rememberSaveable(selected) { mutableStateOf<Int?>(null) }
     DisposableEffect(Unit) { onDispose { vm.stopPreview() } }
     LaunchedEffect(selected,channels.isNotEmpty(),shelves.isNotEmpty()) {
         vm.warmVisible(if(selected==null) shelves.take(8).flatMap {it.channels.take(10)} else channels)
@@ -268,7 +269,9 @@ fun LiveScreen(nav: NavHostController, vm: LiveViewModel = hiltViewModel()) {
             }
         } else if(channels.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth(),contentAlignment=Alignment.Center) {Text("אין ערוצים בקטגוריה הזו",color=NakashColors.Muted)}
         else LazyVerticalGrid(columns=GridCells.Fixed(5),modifier=Modifier.weight(1f).padding(horizontal=22.dp).focusGroup(),contentPadding=PaddingValues(10.dp),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-            gridItemsIndexed(channels,key={_,c->c.id}) {i,channel -> Box(if(i==0) Modifier.focusRequester(gridFocus).focusGroup() else Modifier) { LiveTile(channel,now[channel.id],clock,{vm.focus(channel)},{play(channel)},{context=channel;contextCategory=selected;vm.context(channel)}) }}
+            // The channel you were on returns with focus (Back from the player), else the first one.
+            gridItemsIndexed(channels,key={_,c->c.id}) {i,channel -> Box((if(lastChannel?.let { id -> channels.any { it.id==id } }==true) (if(channel.id==lastChannel) Modifier.focusRequester(gridFocus) else Modifier) else if(i==0) Modifier.focusRequester(gridFocus) else Modifier)
+                .onFocusChanged { if(it.hasFocus) lastChannel=channel.id }.focusGroup()) { LiveTile(channel,now[channel.id],clock,{vm.focus(channel)},{play(channel)},{context=channel;contextCategory=selected;vm.context(channel)}) }}
         }
     }
 

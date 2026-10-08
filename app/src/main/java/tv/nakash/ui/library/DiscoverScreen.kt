@@ -67,6 +67,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tv.nakash.ui.components.PosterCard
+import tv.nakash.ui.components.ifAttached
 import tv.nakash.ui.components.TrailerStage
 import tv.nakash.ui.components.TrailerTarget
 import tv.nakash.ui.theme.NakashColors
@@ -103,8 +104,10 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     val tmdbKey by vm.tmdbPrefs.key.collectAsState()
     var selectedCategory by rememberSaveable(kind) { mutableStateOf<String?>(null) }
     var focusedShelf by rememberSaveable(kind) { mutableStateOf<String?>(null) }
-    var focusedId by remember(kind) { mutableStateOf<Int?>(null) }
-    var billboardFocused by remember(kind) { mutableStateOf(true) }
+    // Saved with the screen, so Back from a title returns to the card (or grid tile) you left.
+    var focusedId by rememberSaveable(kind) { mutableStateOf<Int?>(null) }
+    var billboardFocused by rememberSaveable(kind) { mutableStateOf(true) }
+    val cardFocus = remember { FocusRequester() }
     val list = rememberLazyListState()
     val rowState = rememberSaveableStateHolder()
     val endFocus = remember { mutableMapOf<String, FocusRequester>() }
@@ -227,10 +230,13 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     val manualScroll = remember { object : BringIntoViewSpec { override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float) = 0f } }
     val playFocus = remember { FocusRequester() }
     val gridFocus = remember { FocusRequester() }
+    // The grid ("הצג הכול") tile you were on, per category: Back from a title returns to it.
+    var gridFocusedId by rememberSaveable(selectedCategory) { mutableStateOf<Int?>(null) }
     LaunchedEffect(selectedCategory, titles.isNotEmpty(), filtered.isNotEmpty()) {
         if (titles.isEmpty()) return@LaunchedEffect
         delay(200)
-        runCatching { if (selectedCategory != null) gridFocus.requestFocus() else (returnToShelf?.let { endFocus[it] } ?: playFocus).requestFocus() }
+        runCatching { if (selectedCategory != null) gridFocus.requestFocus() else (returnToShelf?.let { endFocus[it] } ?: if (!billboardFocused && focusedId != null) cardFocus else playFocus).requestFocus() }
+            .onFailure { runCatching { playFocus.requestFocus() } }
         returnToShelf = null
     }
     LaunchedEffect(kind) { if (if (seriesMode) vm.series.value.isEmpty() else vm.movies.value.isEmpty()) vm.refresh(seriesMode) }
@@ -243,7 +249,8 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                 tv.nakash.ui.components.CategoryHeading(shelves.firstOrNull { it.key == selectedCategory }?.title ?: "כל התכנים", ::closeCategory, "${filtered.size} כותרים")
                 LazyVerticalGrid(GridCells.Adaptive(142.dp), Modifier.weight(1f).focusGroup(), contentPadding = PaddingValues(start = 32.dp, end = 32.dp, top = 10.dp, bottom = 32.dp),
                     horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                    itemsIndexed(filtered, key = { _, it -> it.id }) { i, item -> Box(if (i == 0) Modifier.focusRequester(gridFocus).focusGroup() else Modifier) {
+                    itemsIndexed(filtered, key = { _, it -> it.id }) { i, item -> Box((if (gridFocusedId?.let { id -> filtered.any { f -> f.id == id } } == true) (if (item.id == gridFocusedId) Modifier.focusRequester(gridFocus) else Modifier) else if (i == 0) Modifier.focusRequester(gridFocus) else Modifier)
+                        .onFocusChanged { if (it.hasFocus) gridFocusedId = item.id }.focusGroup()) {
                         PosterCard(item.title, item.year, item.image, item.progress, {}, { open(item) }, item.resumeLabel ?: item.title, expandable = false) } }
                 }
             }
@@ -306,10 +313,10 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                                 // Entering a row lands on the card you left it on, or its first card: never the card that happens to
                                 // sit under the middle of the widened one above.
                                 val rowFirst = remember(shelf.key) { FocusRequester() }
-                                androidx.compose.foundation.lazy.LazyRow(modifier = Modifier.focusRestorer { rowFirst }, state = rowList, contentPadding = PaddingValues(horizontal = 40.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                androidx.compose.foundation.lazy.LazyRow(modifier = Modifier.focusRestorer { rowFirst.ifAttached() }, state = rowList, contentPadding = PaddingValues(horizontal = 40.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     rowItemsIndexed(shelf.items, key = { _, it -> it.id }) { i, item ->
                                         val expanded = rowFocused && focusedId == item.id
-                                        Box(if (i == 0) Modifier.focusRequester(rowFirst) else Modifier) {
+                                        Box((if (i == 0) Modifier.focusRequester(rowFirst) else Modifier).then(if (focusedShelf == shelf.key && focusedId == item.id) Modifier.focusRequester(cardFocus) else Modifier)) {
                                         val wide = wideOf(item)
                                         ExpandingCard(remember(item, wide) { if (wide == item.backdrop) item else item.copy(backdrop = wide) }, expanded, playingHere = expanded && cardPlaying,
                                             onBounds = { if (expanded) { liveBounds[1] = it; if (wantKey?.second == false) cardBounds = it } },

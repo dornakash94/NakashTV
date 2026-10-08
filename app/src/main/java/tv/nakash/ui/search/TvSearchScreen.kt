@@ -88,7 +88,7 @@ fun TvSearchScreen(nav:NavHostController,vm:TvSearchViewModel=hiltViewModel()) {
     var language by rememberSaveable {mutableIntStateOf(0)}
     val firstKey=remember {FocusRequester()}
     val resultFocus=remember {FocusRequester()}
-    LaunchedEffect(Unit) {delay(250);firstKey.requestFocus()}
+    LaunchedEffect(Unit) {delay(250);runCatching{firstKey.requestFocus()}}
     val characters=when(language) {0->"אבגדהוזחטיכלמנסעפצקרשתךםןףץ";1->"ABCDEFGHIJKLMNOPQRSTUVWXYZ";else->"1234567890"}.map {it.toString()}
     fun type(value:String) {vm.edit(query+value)}
     Row(Modifier.fillMaxSize().padding(horizontal=24.dp,vertical=24.dp).onPreviewKeyEvent {event ->

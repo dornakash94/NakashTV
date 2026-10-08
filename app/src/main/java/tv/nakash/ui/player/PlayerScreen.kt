@@ -242,7 +242,7 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
         overlay=true;manuallyHidden=false
         uiScope.launch {delay(80);runCatching {subtitlesFocus.requestFocus()}}
     }
-    fun returnToLive() { archive?.let { vm.controller.play(PlayRequest.Live(it.channel));scrubMs=null;scrubEpoch=null;showPrograms=false;showMini=false;focus.requestFocus() } }
+    fun returnToLive() { archive?.let { vm.controller.play(PlayRequest.Live(it.channel));scrubMs=null;scrubEpoch=null;showPrograms=false;showMini=false;runCatching{focus.requestFocus()} } }
     fun nowSec() = System.currentTimeMillis() / 1000
     /** Where playback is on the broadcast clock: live = now; catch-up = chunk start + position. */
     fun wallClock(): Long = if (archive != null) st.archiveStart + position / 1000 else nowSec()
@@ -271,7 +271,7 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
         vm.loadTimeline(ch); scrubEpoch = null; programsIndex = 0; showMini = false; showPrograms = true
     }
     fun back() {
-        when { showPrograms->showPrograms=false; scrubEpoch!=null->scrubEpoch=null; showMini->showMini=false;showTracks->{showTracks=false;focus.requestFocus()};showAspect->{showAspect=false;focus.requestFocus()}
+        when { showPrograms->showPrograms=false; scrubEpoch!=null->scrubEpoch=null; showMini->showMini=false;showTracks->{showTracks=false;runCatching{focus.requestFocus()}};showAspect->{showAspect=false;runCatching{focus.requestFocus()}}
             archive!=null->returnToLive()
             else->{
                 if(req is PlayRequest.Movie || req is PlayRequest.Episode)
@@ -317,7 +317,7 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
     LaunchedEffect(lastKey, showMini, scrubMs,showTracks,showAspect,scrubEpoch,showPrograms) { if(manuallyHidden) {overlay=false;return@LaunchedEffect}; if(quietEntry && lastKey==enteredAt && !showMini && scrubMs==null && scrubEpoch==null) return@LaunchedEffect; overlay = true; delay(4_000); if (!showMini && !showTracks && !showAspect && playerFocused && scrubMs == null && scrubEpoch == null && !showPrograms && st.error == null) overlay = false }
     LaunchedEffect(digits) { if (digits.isNotEmpty()) { delay(1_200); digits.toIntOrNull()?.let(vm::jumpToNumber); digits = "" } }
     LaunchedEffect(scrubMs) { if (scrubMs != null) { delay(1_500); scrubMs?.let(vm.controller::seekTo); scrubMs = null } }
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    LaunchedEffect(Unit) { runCatching{focus.requestFocus()} }
 
     Box(
         Modifier.fillMaxSize().background(Color.Black)
@@ -439,7 +439,7 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
                     add(BarButton(Icons.Outlined.Subtitles, if(channel==null) "כתוביות ושמע" else "כתוביות", focus=subtitlesFocus) { showTracks=true })
                     add(BarButton(Icons.Outlined.AspectRatio, "יחס תמונה", focus=aspectFocus) { showAspect=true })
                 }
-                val pills: @Composable () -> Unit = { PillRow(up = { focus.requestFocus() }, buttons = pillButtons) }
+                val pills: @Composable () -> Unit = { PillRow(up = { runCatching{focus.requestFocus()} }, buttons = pillButtons) }
 
                 if (channel != null) {
                     if (!(live != null && showMini)) {
@@ -468,10 +468,10 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
             }
         }
         if(showPrograms && channel!=null) CatchupPanel(channel, vm.catchupRows(channel, nowSec()), programsIndex, archive != null, nowSec())
-        if(showTracks) SubtitlePopover(vm.controller) {showTracks=false;lastKey=System.currentTimeMillis();focus.requestFocus()}
-        if(showAspect) PlayerPopover("יחס תמונה",0,{showAspect=false;lastKey=System.currentTimeMillis();focus.requestFocus()}) {
+        if(showTracks) SubtitlePopover(vm.controller) {showTracks=false;lastKey=System.currentTimeMillis();runCatching{focus.requestFocus()}}
+        if(showAspect) PlayerPopover("יחס תמונה",0,{showAspect=false;lastKey=System.currentTimeMillis();runCatching{focus.requestFocus()}}) {
             listOf(0 to "מקורי · ללא חיתוך",4 to "מילוי · עם חיתוך",3 to "מתיחה למסך").forEachIndexed {index,(mode,label) ->
-                PopoverOption(label,controls.aspectMode==mode,index==0) {vm.controls.setAspect(mode);showAspect=false;lastKey=System.currentTimeMillis();focus.requestFocus()}
+                PopoverOption(label,controls.aspectMode==mode,index==0) {vm.controls.setAspect(mode);showAspect=false;lastKey=System.currentTimeMillis();runCatching{focus.requestFocus()}}
             }
         }
 

@@ -84,8 +84,15 @@ fun NetflixRowsPage(
     shelves: List<RowShelf>, previewPlayer: androidx.media3.common.Player?, previewHasFrame: Boolean,
     firstFocus: FocusRequester, modifier: Modifier = Modifier, restoreKey: Any = Unit,
 ) {
-    var focusedShelf by remember(restoreKey) { mutableStateOf<String?>(null) }
-    var focusedCard by remember(restoreKey) { mutableStateOf<String?>(null) }
+    // Saved with the screen: coming back (Back from a title, the player or another tab) lands on the card you left.
+    var focusedShelf by androidx.compose.runtime.saveable.rememberSaveable(restoreKey) { mutableStateOf<String?>(null) }
+    var focusedCard by androidx.compose.runtime.saveable.rememberSaveable(restoreKey) { mutableStateOf<String?>(null) }
+    // Where [firstFocus] goes: the card that had focus when the screen was left, else the first card.
+    val entry = remember(shelves.isNotEmpty()) {
+        val s = focusedShelf; val c = focusedCard
+        if (s != null && c != null && shelves.any { it.key == s && it.cards.any { x -> x.key == c } }) s to c
+        else shelves.firstOrNull()?.let { it.key to it.cards.firstOrNull()?.key }
+    }
     val list = rememberLazyListState()
     val rowState = rememberSaveableStateHolder()
     // trailers
@@ -164,10 +171,10 @@ fun NetflixRowsPage(
                             // Rows keep the platform's bring-into-view (focus search across a row relies on it); only the page list
                             // has it disabled. Our anchoring scroll then only adds what is still missing.
                             CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides noAutoScroll) {
-                            LazyRow(modifier = Modifier.focusRestorer { rowFirst }, state = rowList, contentPadding = PaddingValues(horizontal = 40.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            LazyRow(modifier = Modifier.focusRestorer { rowFirst.ifAttached() }, state = rowList, contentPadding = PaddingValues(horizontal = 40.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 itemsIndexed(shelf.cards, key = { _, c -> c.key }) { i, c ->
                                     val isFocused = rowFocused && focusedCard == c.key
-                                    Box(if (i == 0) Modifier.focusRequester(rowFirst).then(if (shelfIndex == 0) Modifier.focusRequester(firstFocus) else Modifier) else Modifier) {
+                                    Box((if (i == 0) Modifier.focusRequester(rowFirst) else Modifier).then(if (entry?.first == shelf.key && entry.second == c.key) Modifier.focusRequester(firstFocus) else Modifier)) {
                                         // Same objects from one pass to the next, so cards whose inputs did not change skip recomposition.
                                         val onF = remember(shelf.key, c) { { focusedShelf = shelf.key; focusedCard = c.key; c.onFocus() } }
                                         val onB = remember(isFocused) { { r: Rect -> if (isFocused) { liveBounds[0] = r; if (want != null) cardBounds = r } } }
@@ -269,3 +276,11 @@ private fun ProgressLine(p: Float, modifier: Modifier) {
         Box(modifier.fillMaxWidth().height(4.dp).background(Color.White.copy(alpha = .22f))) { Box(Modifier.fillMaxWidth(p.coerceIn(0f, 1f)).fillMaxHeight().background(NakashColors.Live)) }
     }
 }
+
+
+/**
+ * This requester when its card is attached right now, else the default focus search. Entering a row whose first card
+ * is not attached (still pre-composed, or the screen being rebuilt) made Compose throw and took the app down;
+ * freeFocus() is a harmless no-op that throws exactly in that case.
+ */
+internal fun FocusRequester.ifAttached(): FocusRequester = if (runCatching { freeFocus() }.isSuccess) this else FocusRequester.Default

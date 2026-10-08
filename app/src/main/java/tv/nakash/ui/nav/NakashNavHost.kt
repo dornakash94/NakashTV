@@ -138,7 +138,10 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
         }
     }
     Box(Modifier.fillMaxSize().background(NakashColors.Bg)) {
-        Box(Modifier.fillMaxSize().padding(top = if (immersive || overlayNav) 0.dp else NavBarHeight).focusRequester(contentFocus).focusGroup()) {
+        // Focus in the page = not in the nav bar. The bar's own flag could stay "true" after focus moved down (rows
+        // restoring focus by themselves), and Back then went Home instead of up to this section's tab.
+        Box(Modifier.fillMaxSize().padding(top = if (immersive || overlayNav) 0.dp else NavBarHeight).focusRequester(contentFocus)
+            .onFocusChanged { if (it.hasFocus) navFocused = false }.focusGroup()) {
             NavHost(
                 nav, startDestination = "home",
                 enterTransition = { fadeIn(tween(260)) }, exitTransition = { fadeOut(tween(140)) },
