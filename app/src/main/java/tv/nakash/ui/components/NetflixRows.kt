@@ -20,13 +20,13 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
@@ -171,7 +171,7 @@ fun NetflixRowsPage(
                             // Rows keep the platform's bring-into-view (focus search across a row relies on it); only the page list
                             // has it disabled. Our anchoring scroll then only adds what is still missing.
                             CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides noAutoScroll) {
-                            LazyRow(modifier = Modifier.focusRestorer { rowFirst.ifAttached() }, state = rowList, contentPadding = PaddingValues(horizontal = 40.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            LazyRow(modifier = Modifier.focusProperties { enter = { rowFirst.ifAttached() } }, state = rowList, contentPadding = PaddingValues(horizontal = 40.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 itemsIndexed(shelf.cards, key = { _, c -> c.key }) { i, c ->
                                     val isFocused = rowFocused && focusedCard == c.key
                                     Box((if (i == 0) Modifier.focusRequester(rowFirst) else Modifier).then(if (entry?.first == shelf.key && entry.second == c.key) Modifier.focusRequester(firstFocus) else Modifier)) {

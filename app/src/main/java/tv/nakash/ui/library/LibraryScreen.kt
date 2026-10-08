@@ -9,6 +9,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -73,7 +76,17 @@ fun Action(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, en
 
 @Composable
 fun SearchField(value: String, onChange: (String) -> Unit, label: String = "חיפוש לפי שם", modifier: Modifier = Modifier) {
-    OutlinedTextField(value, onChange, singleLine = true, modifier = modifier.fillMaxWidth(),
+    // On a remote: ▲ / ▼ leave the field (a text field keeps the arrows otherwise, and remotes have no Tab key).
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    OutlinedTextField(value, onChange, singleLine = true, modifier = modifier.fillMaxWidth().onPreviewKeyEvent { e ->
+            if (e.type != androidx.compose.ui.input.key.KeyEventType.KeyDown) return@onPreviewKeyEvent false
+            when (e.key) {
+                androidx.compose.ui.input.key.Key.DirectionDown -> { keyboard?.hide(); focus.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) }
+                androidx.compose.ui.input.key.Key.DirectionUp -> { keyboard?.hide(); focus.moveFocus(androidx.compose.ui.focus.FocusDirection.Up) }
+                else -> false
+            }
+        },
         label = { Text(label, color = NakashColors.Muted) },
         colors = OutlinedTextFieldDefaults.colors(focusedTextColor = NakashColors.Text, unfocusedTextColor = NakashColors.Text,
             focusedBorderColor = NakashColors.Accent, unfocusedBorderColor = NakashColors.Muted, cursorColor = NakashColors.Accent))

@@ -120,28 +120,24 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
      * section. Back again from the nav bar goes Home; Back from the nav bar while on Home asks to exit.
      * Detail/player screens keep the normal pop.
      */
-    BackHandler(enabled = !fullscreen) {
-        when {
-            route !in Dest.topLevel -> nav.popBackStack()
-            !navFocused -> focusNav()
-            route == "home" -> exitPrompt = true
-            else -> goTab("home")
-        }
-    }
+    var contentHasFocus by remember { mutableStateOf(false) }
     LaunchedEffect(route) {
-        // After a tab switch the screen may still be loading with nothing focusable yet; keep nudging
-        // focus into the content until it actually leaves the nav bar, so Back stays predictable.
-        if (!fullscreen) repeat(12) {
-            kotlinx.coroutines.delay(200)
+        // A new screen starts with focus in its page: a stale "in the nav bar" from before (the bar is not even shown
+        // on title pages) made Back go Home instead of up to this section's tab.
+        navFocused = false
+        // Screens put focus where it belongs themselves (the card you came back to, the first card...). Only if
+        // nothing in the page has focus after a while (still loading), nudge it into the page.
+        if (!fullscreen) repeat(8) {
+            kotlinx.coroutines.delay(if (it == 0) 1_200 else 300)
+            if (contentHasFocus) return@LaunchedEffect
             runCatching { contentFocus.requestFocus() }
-            if (!navFocused) return@LaunchedEffect
         }
     }
     Box(Modifier.fillMaxSize().background(NakashColors.Bg)) {
         // Focus in the page = not in the nav bar. The bar's own flag could stay "true" after focus moved down (rows
         // restoring focus by themselves), and Back then went Home instead of up to this section's tab.
         Box(Modifier.fillMaxSize().padding(top = if (immersive || overlayNav) 0.dp else NavBarHeight).focusRequester(contentFocus)
-            .onFocusChanged { if (it.hasFocus) navFocused = false }.focusGroup()) {
+            .onFocusChanged { contentHasFocus = it.hasFocus; if (it.hasFocus) navFocused = false }.focusGroup()) {
             NavHost(
                 nav, startDestination = "home",
                 enterTransition = { fadeIn(tween(260)) }, exitTransition = { fadeOut(tween(140)) },
@@ -157,6 +153,16 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
                 composable("movie/{id}") { MovieDetailScreen(nav, it.arguments!!.getString("id")!!.toInt()) }
                 composable("seriesDetail/{id}") { SeriesDetailScreen(nav, it.arguments!!.getString("id")!!.toInt()) }
                 composable("player") { PlayerScreen(nav) }
+            }
+        }
+        // Registered after NavHost's own back handling so this one decides: on a tab, Back goes up to the tab in the
+        // nav bar (NavHost alone popped straight back to Home).
+        BackHandler(enabled = !fullscreen) {
+            when {
+                route !in Dest.topLevel -> nav.popBackStack()
+                !navFocused -> focusNav()
+                route == "home" -> exitPrompt = true
+                else -> goTab("home")
             }
         }
         if (exitPrompt) Dialog(onDismissRequest = { exitPrompt = false }) { Surface { Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {

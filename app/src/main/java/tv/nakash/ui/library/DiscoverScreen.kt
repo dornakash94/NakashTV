@@ -11,7 +11,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -32,6 +31,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.blur
@@ -232,11 +232,14 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     val gridFocus = remember { FocusRequester() }
     // The grid ("הצג הכול") tile you were on, per category: Back from a title returns to it.
     var gridFocusedId by rememberSaveable(selectedCategory) { mutableStateOf<Int?>(null) }
-    LaunchedEffect(selectedCategory, titles.isNotEmpty(), filtered.isNotEmpty()) {
+    LaunchedEffect(selectedCategory, titles.isNotEmpty(), filtered.isNotEmpty(), shelves.isNotEmpty()) {
         if (titles.isEmpty()) return@LaunchedEffect
-        delay(200)
-        runCatching { if (selectedCategory != null) gridFocus.requestFocus() else (returnToShelf?.let { endFocus[it] } ?: if (!billboardFocused && focusedId != null) cardFocus else playFocus).requestFocus() }
-            .onFailure { runCatching { playFocus.requestFocus() } }
+        // Back to where you were: the grid tile, the row's "show all", the card, else the billboard. The rows are built
+        // a moment after the screen returns, so the card is tried for up to ~2 s before falling back.
+        val target = if (selectedCategory != null) gridFocus else returnToShelf?.let { endFocus[it] } ?: if (!billboardFocused && focusedId != null) cardFocus else playFocus
+        var ok = false
+        for (i in 0 until 12) { delay(if (i == 0) 200 else 150); if (runCatching { target.requestFocus() }.isSuccess) { ok = true; break } }
+        if (!ok) runCatching { playFocus.requestFocus() }
         returnToShelf = null
     }
     LaunchedEffect(kind) { if (if (seriesMode) vm.series.value.isEmpty() else vm.movies.value.isEmpty()) vm.refresh(seriesMode) }
@@ -313,7 +316,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                                 // Entering a row lands on the card you left it on, or its first card: never the card that happens to
                                 // sit under the middle of the widened one above.
                                 val rowFirst = remember(shelf.key) { FocusRequester() }
-                                androidx.compose.foundation.lazy.LazyRow(modifier = Modifier.focusRestorer { rowFirst.ifAttached() }, state = rowList, contentPadding = PaddingValues(horizontal = 40.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                androidx.compose.foundation.lazy.LazyRow(modifier = Modifier.focusProperties { enter = { rowFirst.ifAttached() } }, state = rowList, contentPadding = PaddingValues(horizontal = 40.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     rowItemsIndexed(shelf.items, key = { _, it -> it.id }) { i, item ->
                                         val expanded = rowFocused && focusedId == item.id
                                         Box((if (i == 0) Modifier.focusRequester(rowFirst) else Modifier).then(if (focusedShelf == shelf.key && focusedId == item.id) Modifier.focusRequester(cardFocus) else Modifier)) {
