@@ -102,6 +102,9 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     val status by vm.status.collectAsState()
     val favorites by vm.favorites.collectAsState()
     val tmdbKey by vm.tmdbPrefs.key.collectAsState()
+    val smartAll by vm.smart.collectAsState()
+    val smart = smartAll[seriesMode].orEmpty()
+    LaunchedEffect(seriesMode) { vm.loadSmart(seriesMode) }
     var selectedCategory by rememberSaveable(kind) { mutableStateOf<String?>(null) }
     var focusedShelf by rememberSaveable(kind) { mutableStateOf<String?>(null) }
     // Saved with the screen, so Back from a title returns to the card (or grid tile) you left.
@@ -136,16 +139,21 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
             }
         }
     }
-    val shelves by produceState(emptyList<Shelf>(), titles, categories, continued, favorites) {
+    val shelves by produceState(emptyList<Shelf>(), titles, categories, continued, favorites, smart) {
         value = withContext(Dispatchers.Default) {
             buildList {
                 if (continued.isNotEmpty()) add(Shelf("continue", "המשך צפייה", continued.take(12)))
                 val indexed = titles.associateBy { it.id }
                 val mine = favorites.filter { it.kind == (if (seriesMode) "series" else "movie") }.sortedByDescending { it.addedAt }.mapNotNull { indexed[it.refId.toIntOrNull()] }
                 if (mine.isNotEmpty()) add(Shelf("mylist", "הרשימה שלי", mine.take(12)))
+                // Personal first ("כי צפית ב…", "מותאם בשבילך", the profile's genres), then new, trending, top rated and the themes.
+                fun smartShelf(r: tv.nakash.data.repo.IdRow) = r.ids.mapNotNull { indexed[it] }.take(20).takeIf { it.size >= 4 }?.let { add(Shelf(r.key, r.title, it)) }
+                smart.filter { it.key.startsWith("because") || it.key.startsWith("p_") }.forEach(::smartShelf)
                 if (titles.isNotEmpty()) add(Shelf("new", if (seriesMode) "פרקים חדשים" else "חדש בשירות", titles.take(12)))
+                smart.filter { it.key == "trend" }.forEach(::smartShelf)
                 val rated = titles.filter { (it.rating ?: 0.0) >= 7.0 }.sortedByDescending { it.rating }.take(12)
                 if (rated.isNotEmpty()) add(Shelf("rated", "שווה לראות", rated))
+                smart.filter { it.key.startsWith("c_") }.forEach(::smartShelf)
                 // One pass over the titles (each title's category list split once), not one pass per category.
                 val byCategory = HashMap<String, MutableList<ShelfTitle>>()
                 for (t in titles) for (c in t.categories.split(',')) { val l = byCategory.getOrPut(c) { ArrayList(12) }; if (l.size < 12) l += t }
@@ -156,7 +164,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
             }
         }
     }
-    val filtered by produceState(emptyList<ShelfTitle>(), selectedCategory, titles, continued, favorites) {
+    val filtered by produceState(emptyList<ShelfTitle>(), selectedCategory, titles, continued, favorites, smart) {
         if (selectedCategory == null) { value = emptyList(); return@produceState }
         value = withContext(Dispatchers.Default) {
             when (selectedCategory) {
@@ -164,6 +172,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                 "mylist" -> favorites.filter { it.kind == (if (seriesMode) "series" else "movie") }.sortedByDescending { it.addedAt }.mapNotNull { f -> titles.firstOrNull { it.id == f.refId.toIntOrNull() } }
                 "new" -> titles
                 "rated" -> titles.filter { (it.rating ?: 0.0) >= 7.0 }.sortedByDescending { it.rating }
+                in smart.map { it.key } -> titles.associateBy { it.id }.let { ix -> smart.first { it.key == selectedCategory }.ids.mapNotNull { ix[it] } }
                 else -> titles.filter { selectedCategory?.removePrefix("cat") in it.categories.split(',') }
             }
         }

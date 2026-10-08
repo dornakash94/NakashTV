@@ -206,6 +206,7 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
     val enteredAt=remember {System.currentTimeMillis()}
     var overlay by remember { mutableStateOf(!quietEntry) }
     var manuallyHidden by remember {mutableStateOf(false)}
+    var lastZapAt by remember { mutableStateOf(0L) }
     var showMini by remember { mutableStateOf(false) }
     var miniIndex by remember { mutableIntStateOf(0) }
     var showTracks by remember { mutableStateOf(false) }
@@ -323,6 +324,8 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
         Modifier.fillMaxSize().background(Color.Black)
             .onPreviewKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                // Whether the ribbon was already up before this key (every key shows it).
+                val ribbonUp = overlay
                 if(controls.action(e.nativeKeyEvent.keyCode)!=tv.nakash.data.local.RemoteAction.CONTROLS) manuallyHidden=false
                 lastKey = System.currentTimeMillis()
                 val k = e.key
@@ -385,10 +388,19 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
                         else -> false
                     }
                     live != null -> when (k) {
-                        // While rewinding, ▲ opens the channel's earlier shows and ▼ cancels; otherwise they zap.
-                        Key.DirectionUp -> { if (scrubEpoch != null) openPrograms() else vm.zap(live.channel, +1); true }
-                        Key.DirectionDown -> { if (scrubEpoch != null) scrubEpoch = null else vm.zap(live.channel, -1); true }
-                        Key.DirectionCenter, Key.Enter -> { if (scrubEpoch != null) commitScrub() else if(controls.liveOkPauses) vm.controller.togglePlayPause() else {miniIndex=0;vm.loadMini(live.channel); showMini = true}; true }
+                        // While rewinding, ▲ opens the channel's earlier shows and ▼ cancels. On a clean screen ▲ ▼ zap
+                        // (and keep zapping while the ribbon is up from a zap); with the ribbon open, ▼ goes down to its buttons.
+                        Key.DirectionUp -> { if (scrubEpoch != null) openPrograms() else { vm.zap(live.channel, +1); lastZapAt = System.currentTimeMillis() }; true }
+                        Key.DirectionDown -> {
+                            when {
+                                scrubEpoch != null -> scrubEpoch = null
+                                ribbonUp && System.currentTimeMillis() - lastZapAt > 4_000 -> focusPlayerMenu()
+                                else -> { vm.zap(live.channel, -1); lastZapAt = System.currentTimeMillis() }
+                            }
+                            true
+                        }
+                        // OK on a clean screen shows the ribbon (then ▼ reaches the buttons); OK again opens the mini-guide.
+                        Key.DirectionCenter, Key.Enter -> { if (scrubEpoch != null) commitScrub() else if(controls.liveOkPauses) vm.controller.togglePlayPause() else if(ribbonUp) {miniIndex=0;vm.loadMini(live.channel); showMini = true}; true }
                         Key.DirectionLeft, Key.MediaRewind -> { moveScrub(-1); true }
                         Key.DirectionRight -> { if (scrubEpoch != null) moveScrub(+1) else vm.toggleFavorite(live.channel); true }
                         Key.MediaFastForward -> { if (scrubEpoch != null) moveScrub(+1); true }
@@ -447,7 +459,7 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
                         val wall = if (mode == RibbonMode.LIVE) nowSec() else scrubEpoch ?: wallClock()
                         val program = vm.programAt(wall) ?: if (live != null) nowNext.first?.takeIf { wall >= it.start && wall < it.end } else archive?.program?.takeIf { wall >= it.start && wall < it.end }
                         val hint = when (mode) {
-                            RibbonMode.LIVE -> if (channel.archiveDays > 0) "◀ חזרה אחורה בזמן · ▲ ▼ החלפת ערוץ" else "▲ ▼ החלפת ערוץ"
+                            RibbonMode.LIVE -> if (channel.archiveDays > 0) "▼ כפתורים · ◀ חזרה אחורה בזמן · ▲ ▼ במסך נקי: החלפת ערוץ" else "▼ כפתורים · ▲ ▼ במסך נקי: החלפת ערוץ"
                             RibbonMode.REWIND -> "◀ ▶ זזים בזמן · החזקה לדילוג מהיר · OK צפייה · ▲ תוכניות קודמות · ▼ ביטול"
                             RibbonMode.CATCHUP -> if (scrubEpoch != null) "◀ ▶ זזים בזמן · החזקה לדילוג מהיר · OK צפייה · ▼ שידור חי" else "◀ ▶ זזים בזמן · ▲ תוכניות קודמות · ▼ שידור חי"
                         }

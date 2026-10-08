@@ -38,6 +38,11 @@ class CatalogRepository @Inject constructor(
     suspend fun sources(channelId: Int) = channelDao.sources(channelId)
 
     fun newestMovies(limit: Int = 40) = vodDao.newest(limit)
+    suspend fun movieLite() = vodDao.movieLite()
+    suspend fun seriesLite() = vodDao.seriesLite()
+    /** Movies / series by id, in the order of [ids]. */
+    suspend fun moviesByIds(ids: List<Int>) = ids.chunked(500).flatMap { vodDao.moviesByIds(it) }.associateBy { it.id }.let { m -> ids.mapNotNull { m[it] } }
+    suspend fun seriesByIds(ids: List<Int>) = ids.chunked(500).flatMap { vodDao.seriesByIds(it) }.associateBy { it.id }.let { m -> ids.mapNotNull { m[it] } }
     fun searchMovies() = vodDao.searchMovies()
     fun searchSeries() = vodDao.searchSeries()
     fun topRatedMovies() = vodDao.topRated(java.time.Year.now().value - 3)

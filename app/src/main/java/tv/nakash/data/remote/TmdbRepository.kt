@@ -43,6 +43,13 @@ class TmdbRepository @Inject constructor(okHttp: OkHttpClient, private val prefs
         details("tv", id, key)
     }
 
+    /** This week's trending movies or series (two pages, cached a week like everything here). */
+    suspend fun trending(tv: Boolean): List<tv.nakash.domain.TmdbTitle> = withContext(Dispatchers.IO) {
+        val key = prefs.key.value ?: return@withContext emptyList()
+        (1..2).flatMap { page -> get(url("trending/${if (tv) "tv" else "movie"}/week", key) { addQueryParameter("page", page.toString()) })
+            ?.let { runCatching { TmdbParser.trending(it, tv) }.getOrNull() }.orEmpty() }
+    }
+
     /** True when TMDB accepts the key. */
     suspend fun validate(key: String): Boolean = withContext(Dispatchers.IO) {
         runCatching { client.newCall(Request.Builder().url(url("configuration", key)).build()).execute().use { it.isSuccessful } }.getOrDefault(false)

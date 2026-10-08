@@ -24,7 +24,11 @@ import javax.inject.Singleton
 
 /** A viewer under the provider account: own continue watching, list and searches, synced across devices. */
 @Serializable
-data class Profile(val id: String, val name: String, val color: Int, val updatedAt: Long = System.currentTimeMillis(), val deleted: Boolean = false)
+data class Profile(val id: String, val name: String, val color: Int, val updatedAt: Long = System.currentTimeMillis(), val deleted: Boolean = false,
+                   /** One of the 8 avatars (0–7), or -1 for the first letter on [color]. */
+                   val avatar: Int = -1,
+                   /** A cast photo picked from the avatar gallery (TMDB); wins over [avatar]. */
+                   val avatarUrl: String? = null)
 
 /** A recent search of a profile. */
 @Entity(tableName = "searches")
@@ -92,11 +96,14 @@ class ProfileStore @Inject constructor(@ApplicationContext private val ctx: Cont
     fun signOutProfile() { _current.value = null }
     val lastId: String? get() = prefs.getString("last", null)
 
-    fun add(name: String): Profile {
-        val p = Profile(java.util.UUID.randomUUID().toString().take(8), name.trim().take(20).ifBlank { "צופה" }, COLORS[visible.size % COLORS.size])
+    fun add(name: String, avatar: Int, avatarUrl: String? = null): Profile {
+        val p = Profile(java.util.UUID.randomUUID().toString().take(8), name.trim().take(20).ifBlank { "צופה" }, COLORS[visible.size % COLORS.size], avatar = avatar, avatarUrl = avatarUrl)
         save(_all.value + p); return p
     }
-    fun rename(p: Profile, name: String) = upsert(p.copy(name = name.trim().take(20).ifBlank { p.name }, updatedAt = System.currentTimeMillis()))
+    fun update(p: Profile, name: String, avatar: Int, avatarUrl: String? = null) {
+        val u = p.copy(name = name.trim().take(20).ifBlank { p.name }, avatar = avatar, avatarUrl = avatarUrl, updatedAt = System.currentTimeMillis())
+        upsert(u); if (_current.value?.id == p.id) _current.value = u
+    }
     fun remove(p: Profile) { if (visible.size > 1) upsert(p.copy(deleted = true, updatedAt = System.currentTimeMillis())); if (_current.value?.id == p.id) _current.value = null }
     fun upsert(p: Profile) = save(_all.value.filterNot { it.id == p.id } + p)
     /** The server's list merged in (newer wins per profile). */

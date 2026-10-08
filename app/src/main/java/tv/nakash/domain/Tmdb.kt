@@ -44,6 +44,15 @@ object TmdbParser {
         return TmdbDetails(trailer, o.str("backdrop_path")?.let { IMG + "w1280" + it }, o.str("overview"), cast, similar)
     }
 
+    /** The titles of a /trending response, for matching to the library. */
+    fun trending(body: String, tv: Boolean): List<TmdbTitle> =
+        (json.parseToJsonElement(body).jsonObject["results"] as? JsonArray ?: JsonArray(emptyList())).mapNotNull { it as? JsonObject }.mapNotNull { r ->
+            val id = r["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+            val title = (if (tv) r.str("name") else r.str("title")) ?: return@mapNotNull null
+            TmdbTitle(id, title, if (tv) r.str("original_name") else r.str("original_title"),
+                (if (tv) r.str("first_air_date") else r.str("release_date"))?.take(4)?.toIntOrNull(), r.str("poster_path")?.let { IMG + "w342" + it })
+        }
+
     /** First search hit's id, preferring an exact year match. */
     fun searchId(body: String, year: Int?, tv: Boolean): Int? {
         val results = (json.parseToJsonElement(body).jsonObject["results"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: return null

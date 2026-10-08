@@ -30,7 +30,15 @@ import tv.nakash.ui.theme.NakashColors
 import javax.inject.Inject
 
 @HiltViewModel
-class LibraryViewModel @Inject constructor(val catalog: CatalogRepository, val user: UserRepository, val player: PlayerController, val preview: PreviewPlayer, val thumbs:ThumbnailGenerator, val tmdb: tv.nakash.data.remote.TmdbRepository, val tmdbPrefs: tv.nakash.data.local.TmdbPreferences) : ViewModel() {
+class LibraryViewModel @Inject constructor(val catalog: CatalogRepository, val user: UserRepository, val player: PlayerController, val preview: PreviewPlayer, val thumbs:ThumbnailGenerator, val tmdb: tv.nakash.data.remote.TmdbRepository, val tmdbPrefs: tv.nakash.data.local.TmdbPreferences,
+    private val recs: tv.nakash.data.repo.RecommendationRepository, private val profiles: tv.nakash.data.profile.ProfileStore) : ViewModel() {
+    private val _smart = MutableStateFlow<Map<Boolean, List<tv.nakash.data.repo.IdRow>>>(emptyMap())
+    /** Personal + curated rows of the Movies (false) / Series (true) tab, computed once per visit of the screen. */
+    val smart: kotlinx.coroutines.flow.StateFlow<Map<Boolean, List<tv.nakash.data.repo.IdRow>>> = _smart
+    fun loadSmart(series: Boolean) { if (series !in _smart.value) viewModelScope.launch {
+        val rows = runCatching { recs.discoverRows(profiles.current.value?.id, series) }.getOrDefault(emptyList())
+        _smart.value = _smart.value + (series to rows)
+    } }
     val movies = catalog.newestMovies(Int.MAX_VALUE).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val series = catalog.recentlyUpdatedSeries(Int.MAX_VALUE).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val channels = catalog.channels().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

@@ -44,7 +44,16 @@ class HomeViewModel @Inject constructor(
     private val preview: PreviewPlayer,
     @Suppress("unused") searchIndex: tv.nakash.ui.search.SearchIndex,   // created with Home so search is ready
     val tmdb: tv.nakash.data.remote.TmdbRepository,
+    private val recs: tv.nakash.data.repo.RecommendationRepository,
+    profiles: tv.nakash.data.profile.ProfileStore,
 ) : ViewModel() {
+
+    /** The profile's personal rows ("כי צפית ב…", "חדש בשבילך", its genres); Home is rebuilt per profile. */
+    private val recRows = MutableStateFlow<List<tv.nakash.data.repo.RecRow>>(emptyList())
+    init {
+        // After Home has drawn its first rows, so the personal ones never hold up the screen.
+        profiles.current.value?.id?.let { id -> viewModelScope.launch { kotlinx.coroutines.delay(1_200); recRows.value = runCatching { recs.rows(id) }.getOrDefault(emptyList()) } }
+    }
 
     private val kidsPattern = Regex("ילדים|לוגי|ניק|Nick|כוכבים|הופ|לולי|בייבי|דיסני|Zoom|חינוכית")
     private val docsPattern = Regex("דוקו|Doco|ג'יאוגרפיק|דיסקברי|Animal|היסטוריה")
@@ -69,9 +78,10 @@ class HomeViewModel @Inject constructor(
             israel.asSequence().filter { docsPattern.containsMatchIn(it.displayName) }.take(24).toList())
     }.distinctUntilChanged()
     val rows: StateFlow<List<HomeRow>> = combine(
-        user.continueWatching(), favChannels, catalog.newestMovies(24), catalog.recentlyUpdatedSeries(24), combine(themed, extras) { a, b -> a to b },
-    ) { cont, favs, movies, series, (themedRows, extra) ->
+        user.continueWatching(), favChannels, catalog.newestMovies(24), catalog.recentlyUpdatedSeries(24), combine(themed, extras, recRows) { a, b, r -> Triple(a, b, r) },
+    ) { cont, favs, movies, series, (themedRows, extra, personal) ->
         val (mine, hasFavs) = extra
+        fun addRecs(pred: (String) -> Boolean, to: MutableList<HomeRow>) = personal.filter { pred(it.key) }.forEach { to.add(HomeRow(it.key, it.title, it.subtitle, it.items)) }
         val (sport, kids, docs) = themedRows
         buildList {
             val seenSeries=mutableSetOf<Int>()
@@ -86,8 +96,11 @@ class HomeViewModel @Inject constructor(
             }
             if (continued.isNotEmpty()) add(HomeRow("continue", "המשך צפייה", items = continued))
             add(HomeRow("now", if (hasFavs) "הערוצים שלי" else "עכשיו בשידור", if (hasFavs) "המועדפים שלך · לחיצה ארוכה על ערוץ מוסיפה" else "ישראל · לחיצה ארוכה על ערוץ מוסיפה למועדפים", favs))
+            addRecs({ it.startsWith("rec_because") }, this)
             if (mine.isNotEmpty()) add(HomeRow("mylist", "הרשימה שלי", "סרטים וסדרות שסימנת", mine))
+            addRecs({ it == "rec_new" }, this)
             if (movies.isNotEmpty()) add(HomeRow("new", "חדש בשירות", items = movies))
+            addRecs({ it.startsWith("rec_genre") }, this)
             if (series.isNotEmpty()) add(HomeRow("eps", "פרקים חדשים", items = series))
             if (sport.isNotEmpty()) add(HomeRow("sport", "ספורט", "שידורים חיים", sport))
             if (kids.isNotEmpty()) add(HomeRow("kids", "ילדים", items = kids))

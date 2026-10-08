@@ -38,6 +38,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -106,6 +108,10 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
     val navFocus = remember { FocusRequester() }        // the nav item of the current section
     var navFocused by remember { mutableStateOf(false) }
     var exitPrompt by remember { mutableStateOf(false) }
+    var profileMenu by remember { mutableStateOf(false) }
+    val profilesVm: tv.nakash.ui.profile.ProfilePickerViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+    val currentProfile by profilesVm.store.current.collectAsState()
+    val allProfiles by profilesVm.store.all.collectAsState()
     val scope = rememberCoroutineScope()
     fun focusNav() { scope.launch { repeat(6) { if (runCatching { navFocus.requestFocus() }.isSuccess) return@launch; kotlinx.coroutines.delay(40) } } }
     val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
@@ -176,6 +182,13 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
             onDown = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) || runCatching { contentFocus.requestFocus() }.isSuccess },
             // Already on that section: just go back into its content, no reload.
             onSelect = { if (it.route == route) scope.launch { kotlinx.coroutines.delay(250); runCatching { contentFocus.requestFocus() } } else goTab(it.route) },
+            profile = currentProfile, onProfile = { profileMenu = true }, menuOpen = profileMenu, onMenuDismiss = { profileMenu = false },
+            menu = { p ->
+                ProfileMenu(p, allProfiles.filter { !it.deleted && it.id != p.id },
+                    onChoose = { profileMenu = false; profilesVm.choose(it) },
+                    onManage = { profileMenu = false; profilesVm.store.signOutProfile() },
+                    onExit = { profileMenu = false; activity?.finish() })
+            },
         )
         // Israel time on every screen, top right (absolute: the app is RTL, so a plain TopEnd would be the left).
         tv.nakash.ui.components.IsraelClock(Modifier.align(androidx.compose.ui.AbsoluteAlignment.TopRight).absolutePadding(top = 12.dp, right = 40.dp))
@@ -188,7 +201,11 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
  * a solid white pill with black text. The bar always sits on a soft top-down fade so it reads on any image.
  */
 @Composable
-fun TopNav(current: String, activeFocus: FocusRequester, floating: Boolean, onFocusChanged: (Boolean) -> Unit, onDown: () -> Boolean, onSelect: (Dest) -> Unit) {
+fun TopNav(current: String, activeFocus: FocusRequester, floating: Boolean, onFocusChanged: (Boolean) -> Unit, onDown: () -> Boolean, onSelect: (Dest) -> Unit,
+           profile: tv.nakash.data.profile.Profile? = null, onProfile: () -> Unit = {}, menuOpen: Boolean = false, onMenuDismiss: () -> Unit = {},
+           menu: @Composable (tv.nakash.data.profile.Profile) -> Unit = {}) {
+    val avatarFocus = remember { FocusRequester() }
+    val navScope = rememberCoroutineScope()
     val fade = Brush.verticalGradient(0f to NakashColors.Bg.copy(alpha = if (floating) .92f else 1f), .6f to NakashColors.Bg.copy(alpha = if (floating) .5f else 1f), 1f to Color.Transparent)
     Box(Modifier.fillMaxWidth().height(NavBarHeight + if (floating) 40.dp else 12.dp).background(fade)) {
         Row(
@@ -203,6 +220,25 @@ fun TopNav(current: String, activeFocus: FocusRequester, floating: Boolean, onFo
                 val active = current == d.route || (d == Dest.Movies && current.startsWith("movie/")) || (d == Dest.Series && current.startsWith("seriesDetail"))
                 NavTab(d, active, iconOnly = d == Dest.Search || d == Dest.Settings,
                     modifier = if (active) Modifier.focusRequester(activeFocus) else Modifier, onClick = { onSelect(d) })
+            }
+            // Who is watching, at the end of the bar (Netflix): opens switch profile / exit.
+            profile?.let { p ->
+                Spacer(Modifier.width(6.dp))
+                Box {
+                Surface(onClick = onProfile, modifier = Modifier.size(32.dp).focusRequester(avatarFocus),
+                    shape = ClickableSurfaceDefaults.shape(tv.nakash.ui.profile.AvatarShape), scale = ClickableSurfaceDefaults.scale(focusedScale = 1.15f),
+                    colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = Color.Transparent),
+                    border = ClickableSurfaceDefaults.border(focusedBorder = Border(BorderStroke(2.dp, Color.White), shape = tv.nakash.ui.profile.AvatarShape))) {
+                    tv.nakash.ui.profile.Avatar(p, 32.dp, Modifier.fillMaxSize())
+                }
+                // The dropdown hangs right under the avatar; closing it puts the cursor back on the avatar.
+                if (menuOpen) androidx.compose.ui.window.Popup(
+                    alignment = Alignment.TopCenter,
+                    offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 38.dp.roundToPx() }),
+                    onDismissRequest = { onMenuDismiss(); navScope.launch { kotlinx.coroutines.delay(60); runCatching { avatarFocus.requestFocus() } } },
+                    properties = androidx.compose.ui.window.PopupProperties(focusable = true),
+                ) { menu(p) }
+                }
             }
         }
     }

@@ -4,6 +4,11 @@ import android.view.LayoutInflater
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -92,6 +97,8 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
     var started by remember(id) {mutableStateOf(false)}
     var videoView by remember {mutableStateOf<PlayerView?>(null)}
     val heroFocus=remember {FocusRequester()}
+    var plotCut by remember {mutableStateOf(false)}
+    var plotOpen by remember {mutableStateOf(false)}
     val panelFocus=remember {FocusRequester()}
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     var active by remember {mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))}
@@ -231,21 +238,37 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
         tv.nakash.ui.components.TrailerStage(if(trailerOn && trailerKey!=null) tv.nakash.ui.components.TrailerTarget(trailerKey,screen,0f) else null,onPlaying={stagePlaying=it})
         DetailBackdrop(tmdb?.backdrop ?: movie?.backdrop ?: show?.backdrop ?: movie?.poster ?: show?.cover,Modifier.fillMaxSize().graphicsLayer {alpha=bgAlpha})
         // Text side (right, RTL) darkened; the rest of the picture stays clear.
-        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color.Transparent,.40f to Color.Transparent,.72f to Color.Black.copy(alpha=.62f),1f to Color.Black.copy(alpha=.86f))))
+        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color.Transparent,.32f to Color.Transparent,.62f to Color.Black.copy(alpha=.66f),1f to Color.Black.copy(alpha=.86f))))
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.6f to Color.Transparent,1f to Color.Black.copy(alpha=.55f))))
         // Two fixed regions: the menu at the bottom, sized for every button it can have (so it is always fully on
         // screen and Play keeps its place when "טריילר"/"כותרים דומים" arrive), and the text above it, fitted to the
         // space that is left: a long title or plot gets a smaller size / fewer lines instead of pushing the menu away.
-        if(panel==null) Column(Modifier.align(Alignment.TopStart).fillMaxHeight().fillMaxWidth(.44f).padding(start=56.dp,end=8.dp,top=24.dp,bottom=28.dp)) {
+        if(panel==null) Column(Modifier.align(Alignment.TopStart).fillMaxHeight().fillMaxWidth(.52f).padding(start=56.dp,end=8.dp,top=24.dp,bottom=28.dp)) {
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                 val avail=maxHeight
+                val boxW=maxWidth
                 val roomy=avail>=290.dp
                 val medium=!roomy && avail>=220.dp
                 val titleStyle=MaterialTheme.typography.displayLarge.copy(fontSize=if(roomy) 46.sp else if(medium) 38.sp else 34.sp,lineHeight=if(roomy) 52.sp else if(medium) 44.sp else 40.sp)
-                Column(Modifier.align(Alignment.BottomStart),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                    Text(title,style=titleStyle,maxLines=if(roomy || medium) 2 else 1,overflow=TextOverflow.Ellipsis)
+                Column(Modifier.align(Alignment.BottomStart).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(8.dp,Alignment.Bottom)) {
+                    val plot=(movie?.plot ?: show?.plot)?.takeIf {it.isNotBlank()} ?: tmdb?.overview ?: ""
+                    // A long plot needs the room more than a second title line does.
+                    val titleLines=if(roomy || medium) 2 else 1
+                    // On one line the title shrinks until it fits whole, instead of being cut.
+                    val measurer=androidx.compose.ui.text.rememberTextMeasurer()
+                    val widthPx=with(density) {boxW.roundToPx()}
+                    val fitted=if(titleLines==2) titleStyle else listOf(titleStyle.fontSize.value,32f,28f,25f,22f).map {titleStyle.copy(fontSize=it.sp,lineHeight=(it+6).sp)}
+                        .firstOrNull {measurer.measure(title,it,maxLines=1,softWrap=false).size.width<=widthPx} ?: titleStyle.copy(fontSize=22.sp,lineHeight=28.sp)
+                    Text(title,style=fitted,maxLines=titleLines,overflow=TextOverflow.Ellipsis)
                     Text(meta,color=Color.White.copy(alpha=.85f),style=MaterialTheme.typography.titleLarge.copy(fontSize=17.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
-                    Text((movie?.plot ?: show?.plot)?.takeIf {it.isNotBlank()} ?: tmdb?.overview ?: "",style=MaterialTheme.typography.bodyLarge.copy(fontSize=17.sp,lineHeight=24.sp),maxLines=if(roomy) 3 else 2,overflow=TextOverflow.Ellipsis)
+                    // As much of the plot as fits above the menu. When it is cut, ▲ from the menu lands on it and opens the
+                    // whole of it (with the cast and director) over the picture.
+                    Surface(onClick={plotOpen=true},enabled=plotCut,modifier=Modifier.weight(1f,fill=false).onFocusChanged {if(it.isFocused) plotOpen=true},
+                        shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1f),
+                        colors=ClickableSurfaceDefaults.colors(containerColor=Color.Transparent,contentColor=Color.White,focusedContainerColor=Color.White.copy(alpha=.12f),focusedContentColor=Color.White,
+                            disabledContainerColor=Color.Transparent,disabledContentColor=Color.White)) {
+                        Text(plot,style=MaterialTheme.typography.bodyLarge.copy(fontSize=16.sp,lineHeight=23.sp),overflow=TextOverflow.Ellipsis,onTextLayout={plotCut=it.hasVisualOverflow})
+                    }
                     val castNames=tmdb?.cast?.take(3)?.map {it.name}?.takeIf {it.isNotEmpty()} ?: (movie?.cast ?: show?.cast)?.split(',')?.map {it.trim()}?.filter {it.isNotEmpty()}?.take(3).orEmpty()
                     if(castNames.isNotEmpty()) Text("בהשתתפות: "+castNames.joinToString(", "),color=Color.White.copy(alpha=.72f),style=MaterialTheme.typography.bodyLarge.copy(fontSize=15.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
                     if(roomy) movie?.director?.takeIf {it.isNotBlank() && it.split(',').size<=2}?.let {Text("במאי: $it",color=Color.White.copy(alpha=.72f),style=MaterialTheme.typography.bodyLarge.copy(fontSize=15.sp),maxLines=1,overflow=TextOverflow.Ellipsis)}
@@ -271,6 +294,9 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                 DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Info,"פרטים ושחקנים",{panel="details"})
             }
         }
+        if(plotOpen && panel==null) PlotOverlay(title,meta,(movie?.plot ?: show?.plot)?.takeIf {it.isNotBlank()} ?: tmdb?.overview ?: "",
+            tmdb?.cast?.map {it.name}?.takeIf {it.isNotEmpty()} ?: (movie?.cast ?: show?.cast)?.split(',')?.map {it.trim()}?.filter {it.isNotEmpty()}.orEmpty(),
+            movie?.director?.takeIf {it.isNotBlank()}) {plotOpen=false;scope.launch {kotlinx.coroutines.delay(50);runCatching {heroFocus.requestFocus()}}}
         if(panel=="similar") SimilarPanel(title,meta,similar,panelFocus) {nav.navigate(it)}
         if(fullTrailer && trailerKey!=null) FullTrailer(trailerKey,{fullTrailer=false;interaction++},{trailerFailed=true})
         if(panel=="episodes" || panel=="details") {
@@ -313,26 +339,53 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                         item {Action(if(favorite) "✓ ברשימה שלי" else "+ לרשימה שלי",{scope.launch {vm.user.toggleFavorite(if(series) "series" else "movie",id.toString())}})}
                     }
                 } else {
-                    LazyRow(horizontalArrangement=Arrangement.spacedBy(12.dp),contentPadding=PaddingValues(6.dp)) {items(seasons,key={it.id}) {s -> Action(if(s.number==selectedSeason) "✓ ${s.name}" else s.name,{season=s.number})}}
-                    LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(8.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                        if(busy) item {Text("טוענים פרקים…")}
+                    // Seasons as pills (focus picks the season), then the season's episodes as cards: picture with the
+                    // watched bar, "פרק N · name", plot, length. OK plays; long press marks watched / not watched.
+                    LazyRow(horizontalArrangement=Arrangement.spacedBy(10.dp),contentPadding=PaddingValues(vertical=4.dp)) {
+                        items(seasons,key={it.id}) {s ->
+                            val on=s.number==selectedSeason
+                            Surface(onClick={season=s.number},modifier=Modifier.height(42.dp).onFocusChanged {if(it.isFocused) season=s.number},
+                                shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(21.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1.05f),
+                                colors=ClickableSurfaceDefaults.colors(containerColor=if(on) Color.White.copy(.22f) else NakashColors.S1,focusedContainerColor=Color.White,contentColor=Color.White,focusedContentColor=Color.Black)) {
+                                Box(Modifier.fillMaxHeight().padding(horizontal=20.dp),contentAlignment=Alignment.Center) {Text(s.name,style=MaterialTheme.typography.titleMedium.copy(fontSize=17.sp))}
+                            }
+                        }
+                    }
+                    LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(vertical=6.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                        if(busy && episodes.isEmpty()) item {Text("טוענים פרקים…",color=NakashColors.Muted)}
                         if(!busy && episodes.isEmpty()) item {Text("לא נמצאו פרקים בעונה הזו",color=NakashColors.Muted)}
                         items(episodes,key={it.id}) {e ->
                             val saved=progress.firstOrNull {it.refId==e.id}
-                            Row(horizontalArrangement=Arrangement.spacedBy(16.dp),verticalAlignment=Alignment.CenterVertically) {
-                                Surface(onClick={play(e)},modifier=Modifier.weight(1f),colors=ClickableSurfaceDefaults.colors(containerColor=NakashColors.S1,focusedContainerColor=NakashColors.S3)) {
-                                    Row(Modifier.padding(10.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),verticalAlignment=Alignment.CenterVertically) {
-                                        AsyncImage(e.image ?: movie?.backdrop ?: show?.backdrop ?: movie?.poster ?: show?.cover,null,Modifier.width(144.dp).height(81.dp),contentScale=ContentScale.Crop)
-                                        Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(5.dp)) {
-                                            Text("${if(saved?.completed==true) "✓ " else ""}${e.number}. ${e.title}",maxLines=1,overflow=TextOverflow.Ellipsis)
-                                            e.plot?.takeIf {it.isNotBlank()}?.let {Text(it,maxLines=2,overflow=TextOverflow.Ellipsis,color=NakashColors.Muted,style=MaterialTheme.typography.bodySmall)}
-                                            e.durationSec?.let {Text("${it/60} דקות",color=NakashColors.Muted,style=MaterialTheme.typography.labelSmall)}
+                            val isNext=e.id==chosen?.id
+                            Surface(onClick={play(e)},onLongClick={scope.launch {if(saved?.completed==true) vm.user.remove("episode",e.id) else vm.user.markWatched("episode",e.id,id,(e.durationSec ?: 0)*1000L)}},
+                                modifier=Modifier.fillMaxWidth(),shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(14.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1.01f),
+                                colors=ClickableSurfaceDefaults.colors(containerColor=NakashColors.S1,focusedContainerColor=NakashColors.S3,contentColor=Color.White,focusedContentColor=Color.White),
+                                border=ClickableSurfaceDefaults.border(focusedBorder=androidx.tv.material3.Border(androidx.compose.foundation.BorderStroke(2.dp,Color.White),shape=RoundedCornerShape(14.dp)))) {
+                                Row(Modifier.padding(10.dp),horizontalArrangement=Arrangement.spacedBy(18.dp),verticalAlignment=Alignment.CenterVertically) {
+                                    Box(Modifier.width(192.dp).height(108.dp).clip(RoundedCornerShape(10.dp)).background(NakashColors.S2)) {
+                                        AsyncImage(e.image ?: show?.backdrop ?: show?.cover,null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
+                                        if(saved!=null && saved.durationMs>0) androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
+                                            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(4.dp).background(Color.White.copy(.25f))) {
+                                                Box(Modifier.fillMaxWidth(if(saved.completed) 1f else (saved.positionMs.toFloat()/saved.durationMs).coerceIn(0f,1f)).fillMaxHeight().background(NakashColors.Live))
+                                            }
+                                        }
+                                        if(saved?.completed==true) Box(Modifier.align(Alignment.TopEnd).padding(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color.Black.copy(.6f)).padding(horizontal=8.dp,vertical=2.dp)) {Text("✓ נצפה",style=MaterialTheme.typography.labelSmall)}
+                                    }
+                                    Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(5.dp)) {
+                                        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                            Text("פרק ${e.number}"+(e.title.takeIf {it.isNotBlank() && !it.matches(Regex(".*(פרק|Episode|E)\\s*0*${e.number}\\b.*"))}?.let {" · "+tv.nakash.util.isolate(it)} ?: ""),
+                                                style=MaterialTheme.typography.titleLarge.copy(fontSize=18.sp),maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f,false))
+                                            if(isNext) Text(if(saved!=null && !saved.completed) "ממשיכים מכאן" else "הבא",color=NakashColors.Accent,style=MaterialTheme.typography.labelLarge)
+                                        }
+                                        e.plot?.takeIf {it.isNotBlank()}?.let {Text(it,maxLines=2,overflow=TextOverflow.Ellipsis,color=NakashColors.Muted,style=MaterialTheme.typography.bodyMedium.copy(fontSize=15.sp,lineHeight=20.sp))}
+                                        listOfNotNull(e.durationSec?.let {"${it/60} דקות"},saved?.takeIf {!it.completed && it.durationMs>0}?.let {"נותרו ${(it.durationMs-it.positionMs).coerceAtLeast(0)/60000} דק׳"}).takeIf {it.isNotEmpty()}?.let {
+                                            Text(it.joinToString("  ·  "),color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge)
                                         }
                                     }
                                 }
-                                Action(if(saved?.completed==true) "לא נצפה" else "סמן כנצפה",{scope.launch {if(saved?.completed==true) vm.user.remove("episode",e.id) else vm.user.markWatched("episode",e.id,id,(e.durationSec ?: 0)*1000L)}})
                             }
                         }
+                        item {Text("לחיצה ארוכה על פרק מסמנת אותו כנצפה / לא נצפה",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(top=6.dp))}
                     }
                 }
             }
@@ -364,7 +417,7 @@ private fun FullTrailer(key:String,close:()->Unit,failed:()->Unit) {
 private data class SimilarItem(val route:String,val title:String,val image:String?,val meta:String,val plot:String?)
 
 /** Netflix-style menu line: icon and label; the focused one becomes a white pill. */
-private val MenuRowH=46.dp
+private val MenuRowH=42.dp
 private val MenuGap=2.dp
 
 @Composable
@@ -445,5 +498,39 @@ private fun DetailBackdrop(url:String?,modifier:Modifier) {
     }
     androidx.compose.animation.Crossfade(shown,modifier,animationSpec=tween(450),label="backdrop") {u ->
         if(u!=null) AsyncImage(coil3.request.ImageRequest.Builder(ctx).data(u).size(1920,1080).build(),null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
+    }
+}
+
+/**
+ * The whole plot over the picture (opened by ▲ from the menu when the plot is cut): title, details, every line of the
+ * plot, cast and director. Any key closes it (▼, Back, OK, ◄ / ►) and returns to the menu; a very long plot shrinks
+ * to fit instead of scrolling.
+ */
+@Composable
+private fun PlotOverlay(title:String,meta:String,plot:String,cast:List<String>,director:String?,close:()->Unit) {
+    val focus=remember {FocusRequester()}
+    var size by remember(plot) {mutableStateOf(18f)}
+    var held by remember {mutableStateOf(false)}
+    BackHandler(onBack=close)
+    // Take the focus from the plot under it (retry until attached); if focus ever leaves, the overlay closes.
+    LaunchedEffect(Unit) {repeat(10) {if(runCatching {focus.requestFocus()}.isSuccess && held) return@LaunchedEffect;kotlinx.coroutines.delay(40)}}
+    Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color.Black.copy(alpha=.55f),.3f to Color.Black.copy(alpha=.8f),.55f to Color.Black.copy(alpha=.94f),1f to Color.Black.copy(alpha=.97f)))
+        .onPreviewKeyEvent {e -> if(e.type==androidx.compose.ui.input.key.KeyEventType.KeyUp) {if(e.key!=androidx.compose.ui.input.key.Key.DirectionUp) close()}; true}
+        .onFocusChanged {if(it.hasFocus) held=true else if(held) close()}
+        .focusRequester(focus).focusable()) {
+        Column(Modifier.align(Alignment.CenterStart).fillMaxWidth(.66f).fillMaxHeight().padding(start=56.dp,end=24.dp,top=36.dp,bottom=28.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            Text(title,style=MaterialTheme.typography.displayLarge.copy(fontSize=36.sp,lineHeight=42.sp),maxLines=2,overflow=TextOverflow.Ellipsis)
+            Text(meta,color=Color.White.copy(alpha=.85f),style=MaterialTheme.typography.titleLarge.copy(fontSize=17.sp),maxLines=1)
+            Text(plot,Modifier.weight(1f,fill=false),color=Color.White,style=MaterialTheme.typography.bodyLarge.copy(fontSize=size.sp,lineHeight=(size*1.45f).sp),
+                overflow=TextOverflow.Ellipsis,onTextLayout={if(it.hasVisualOverflow && size>12f) size-=1f})
+            if(cast.isNotEmpty()) Text("בהשתתפות: "+cast.take(8).joinToString(", "),color=Color.White.copy(alpha=.75f),style=MaterialTheme.typography.bodyLarge.copy(fontSize=15.sp,lineHeight=21.sp),maxLines=2,overflow=TextOverflow.Ellipsis)
+            director?.let {Text("במאי: $it",color=Color.White.copy(alpha=.75f),style=MaterialTheme.typography.bodyLarge.copy(fontSize=15.sp),maxLines=1)}
+            Spacer(Modifier.height(6.dp))
+            // Looks like the menu's focused button, so it is clear where any key takes you.
+            Row(Modifier.clip(RoundedCornerShape(22.dp)).background(Color.White).padding(horizontal=20.dp,vertical=10.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                Icon(androidx.compose.material.icons.Icons.Filled.KeyboardArrowDown,null,tint=Color.Black,modifier=Modifier.size(22.dp))
+                Text("חזרה",color=Color.Black,style=MaterialTheme.typography.titleLarge.copy(fontSize=17.sp))
+            }
+        }
     }
 }
