@@ -1,0 +1,8 @@
+name = "nakashtv-sync"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nakashtv-sync"
+database_id = "d1925733-5641-4b76-ac21-d1b36982ff8a"

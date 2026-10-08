@@ -25,6 +25,9 @@ android {
             Properties().apply { f.inputStream().use { load(it) } }.getProperty("tmdb.apiKey")
         } ?: System.getenv("NAKASHTV_TMDB_KEY") ?: "").trim().filter { it.isLetterOrDigit() }
         buildConfigField("String", "TMDB_KEY", "\"$tmdbKey\"")
+        // Profile sync server (Cloudflare Worker in /server): `sync.url` in local.properties or NAKASHTV_SYNC_URL. Empty = profiles stay on this device.
+        buildConfigField("String", "SYNC_URL", "\"" + (rootProject.file("local.properties").takeIf { it.isFile }?.let { f -> Properties().apply { f.inputStream().use { load(it) } }.getProperty("sync.url") }
+            ?: System.getenv("NAKASHTV_SYNC_URL") ?: "") + "\"")
     }
     signingConfigs {
         create("distribution") {

@@ -83,6 +83,7 @@ interface UserDao {
     @Query("SELECT * FROM watch_progress p WHERE p.kind = :kind AND p.completed = 0 AND (p.kind != 'episode' OR NOT EXISTS (SELECT 1 FROM watch_progress newer WHERE newer.seriesId = p.seriesId AND newer.updatedAt > p.updatedAt)) ORDER BY p.updatedAt DESC LIMIT 100")
     fun libraryContinueWatching(kind:String): Flow<List<WatchProgressEntity>>
     @Query("SELECT * FROM watch_progress WHERE completed = 0 ORDER BY updatedAt DESC LIMIT :limit") fun continueWatching(limit: Int): Flow<List<WatchProgressEntity>>
+    @Query("SELECT * FROM watch_progress") suspend fun continueWatchingAll(): List<WatchProgressEntity>
     @Query("SELECT * FROM watch_progress WHERE `key` = :key") suspend fun progress(key: String): WatchProgressEntity?
     @Query("SELECT * FROM watch_progress WHERE seriesId = :seriesId ORDER BY updatedAt DESC LIMIT 1") suspend fun latestForSeries(seriesId: Int): WatchProgressEntity?
     @Query("SELECT * FROM watch_progress WHERE seriesId = :seriesId") fun progressForSeries(seriesId: Int): Flow<List<WatchProgressEntity>>

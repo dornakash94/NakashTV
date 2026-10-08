@@ -28,6 +28,7 @@ import androidx.tv.material3.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.*
 import tv.nakash.data.local.ChannelEntity
 import tv.nakash.data.repo.CatalogRepository
@@ -67,7 +68,11 @@ class SearchIndex @Inject constructor(catalog:CatalogRepository) {
 
 @OptIn(kotlinx.coroutines.FlowPreview::class)
 @HiltViewModel
-class TvSearchViewModel @Inject constructor(searchIndex:SearchIndex,private val player:PlayerController,private val saved:SavedStateHandle):ViewModel() {
+class TvSearchViewModel @Inject constructor(searchIndex:SearchIndex,private val player:PlayerController,private val saved:SavedStateHandle,private val user:tv.nakash.data.repo.UserRepository):ViewModel() {
+    /** This profile's recent searches (synced across devices). */
+    val recent=user.recentSearches(8).stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
+    /** Remembers the query once something was opened from it. */
+    fun remember()=viewModelScope.launch { user.addSearch(query.value) }
     val query=saved.getStateFlow("searchQuery","")
     fun edit(value:String) {saved["searchQuery"]=value.take(80)}
     private val index=searchIndex.index
@@ -125,8 +130,10 @@ fun TvSearchScreen(nav:NavHostController,vm:TvSearchViewModel=hiltViewModel()) {
                 }
             }
             Spacer(Modifier.height(10.dp))
-            Text(if(query.isBlank()) "הקלד כדי לגלות משהו טוב" else "השלמות לחיפוש",color=NakashColors.Muted,style=MaterialTheme.typography.labelLarge.copy(fontSize=12.sp))
+            val recent by vm.recent.collectAsState()
+            Text(if(query.isBlank()) (if(recent.isEmpty()) "הקלד כדי לגלות משהו טוב" else "חיפושים אחרונים") else "השלמות לחיפוש",color=NakashColors.Muted,style=MaterialTheme.typography.labelLarge.copy(fontSize=12.sp))
             LazyColumn(Modifier.fillMaxWidth().height(112.dp),contentPadding=PaddingValues(vertical=5.dp),verticalArrangement=Arrangement.spacedBy(3.dp)) {
+                if(query.isBlank()) items(recent,key={"r:"+it.query}) { r -> SearchKey(r.query,{vm.edit(r.query)},Modifier.fillMaxWidth(),compact=true) }
                 items(results.suggestions,key={it}) { suggestion -> SearchKey(suggestion,{vm.edit(suggestion)},Modifier.fillMaxWidth(),compact=true) }
                 if(query.isNotBlank() && results.suggestions.isEmpty()) item {Text("נסה שם נוסף או כתיב אחר",color=NakashColors.Muted,style=MaterialTheme.typography.labelLarge.copy(fontSize=12.sp))}
             }
@@ -145,13 +152,13 @@ fun TvSearchScreen(nav:NavHostController,vm:TvSearchViewModel=hiltViewModel()) {
                 items(results.items,key={it.document.id}) {tile ->
                     Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
                         val channel=tile.channel
-                        if(channel!=null) Surface(onClick={vm.play(channel);nav.navigate("player")},modifier=Modifier.fillMaxWidth().height(150.dp),shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),colors=ClickableSurfaceDefaults.colors(containerColor=NakashColors.Tile,focusedContainerColor=NakashColors.S3)) {
+                        if(channel!=null) Surface(onClick={vm.remember();vm.play(channel);nav.navigate("player")},modifier=Modifier.fillMaxWidth().height(150.dp),shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),colors=ClickableSurfaceDefaults.colors(containerColor=NakashColors.Tile,focusedContainerColor=NakashColors.S3)) {
                             Column(Modifier.fillMaxSize().padding(10.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.Center) {
                                 ChannelLogo(channel,56)
                                 Spacer(Modifier.height(14.dp))
                                 Text(channel.displayName,maxLines=2,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelLarge.copy(fontSize=14.sp))
                             }
-                        } else PosterCard(tile.document.title,tile.year,tile.image,null,{}, {nav.navigate(if(tile.kind=="סרט") "movie/${tile.ref}" else "seriesDetail/${tile.ref}")},tile.document.title,expandable=false)
+                        } else PosterCard(tile.document.title,tile.year,tile.image,null,{}, {vm.remember();nav.navigate(if(tile.kind=="סרט") "movie/${tile.ref}" else "seriesDetail/${tile.ref}")},tile.document.title,expandable=false)
                         Text(tile.document.title,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelLarge.copy(fontSize=13.sp))
                         Text(listOfNotNull(tile.kind,tile.year?.toString()).joinToString(" · "),color=NakashColors.Muted,style=MaterialTheme.typography.labelLarge.copy(fontSize=11.sp))
                     }

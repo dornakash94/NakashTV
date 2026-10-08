@@ -15,6 +15,7 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject lateinit var accountStore: AccountStore
+    @Inject lateinit var profiles: tv.nakash.data.profile.ProfileStore
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         // Settings is learning a remote button: it gets every key first, before focus, dialogs or the media session.
         tv.nakash.data.local.KeyCapture.onKey?.let { listener ->
@@ -60,7 +61,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             NakashTheme {
                 val account by accountStore.account.collectAsState()
-                if (account == null) LoginScreen() else NakashNavHost()
+                // After the provider login: "מי צופה?" on every start, then the app as that profile.
+                val profile by profiles.current.collectAsState()
+                when {
+                    account == null -> LoginScreen()
+                    profile == null -> tv.nakash.ui.profile.ProfilePickerScreen()
+                    else -> androidx.compose.runtime.key(profile!!.id) { NakashNavHost() }
+                }
             }
         }
     }

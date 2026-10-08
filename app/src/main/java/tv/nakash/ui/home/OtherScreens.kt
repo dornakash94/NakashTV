@@ -35,7 +35,7 @@ import javax.inject.Inject
 @Composable fun SearchScreen(nav: NavHostController) = tv.nakash.ui.search.TvSearchScreen(nav)
 
 @HiltViewModel
-class SettingsViewModel @Inject constructor(private val account: AccountStore, private val catalog: CatalogRepository, private val epg: EpgRepository, private val user: UserRepository, private val player: PlayerController, private val preview: PreviewPlayer, private val db: NakashDb, val controls:PlaybackPreferences, val tmdbPrefs:TmdbPreferences, private val tmdb:tv.nakash.data.remote.TmdbRepository) : ViewModel() {
+class SettingsViewModel @Inject constructor(val profiles:tv.nakash.data.profile.ProfileStore, private val profileSync:tv.nakash.data.profile.ProfileSync, private val account: AccountStore, private val catalog: CatalogRepository, private val epg: EpgRepository, private val user: UserRepository, private val player: PlayerController, private val preview: PreviewPlayer, private val db: NakashDb, val controls:PlaybackPreferences, val tmdbPrefs:TmdbPreferences, private val tmdb:tv.nakash.data.remote.TmdbRepository) : ViewModel() {
     val tmdbStatus=MutableStateFlow<String?>(null)
     fun saveTmdb(key:String,done:()->Unit)=viewModelScope.launch {
         val k=key.trim()
@@ -58,6 +58,8 @@ class SettingsViewModel @Inject constructor(private val account: AccountStore, p
     fun logout()=viewModelScope.launch {
         player.stop();preview.stop()
         withContext(Dispatchers.IO) { db.clearAllTables() }
+        // This device forgets the profiles too (they stay on the sync server for the next sign-in).
+        profiles.clearAll(); profileSync.reset()
         account.clear()
     }
 }
@@ -123,6 +125,7 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
                     Text("בנגן: שמאל אחורה, ימין קדימה, OK להשהיה. בשידור חי: מעלה/מטה להחלפת ערוץ, ימין למועדפים.",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(start=16.dp,top=14.dp))
                 }
                 3 -> {
+                    SettingRow("החלפת פרופיל", vm.profiles.current.collectAsState().value?.name ?: "") {vm.profiles.signOutProfile()}
                     SettingRow("התנתקות","פרטי הכניסה, הרשימה והיסטוריית הצפייה במכשיר יימחקו",enabled=!busy) {confirm=true}
                     Text("NakashTV ${tv.nakash.BuildConfig.VERSION_NAME} · לצפייה על המסך הגדול",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(start=16.dp,top=14.dp))
                 }
