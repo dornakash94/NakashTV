@@ -99,6 +99,8 @@ interface UserDao {
     @Query("SELECT EXISTS(SELECT 1 FROM favorites WHERE `key` = :key)") suspend fun isFavoriteOnce(key: String): Boolean
     @Upsert suspend fun addFavorite(f: FavoriteEntity)
     @Query("DELETE FROM favorites WHERE `key` = :key") suspend fun removeFavorite(key: String)
+    @Query("DELETE FROM watch_progress") suspend fun clearProgress()
+    @Query("DELETE FROM favorites") suspend fun clearFavorites()
 }
 
 data class MovieLite(val id: Int, val title: String, val year: Int?, val genres: String, val rating: Double?, val backdrop: String?, val tmdbId: Int?, val runtimeMin: Int?)

@@ -41,6 +41,8 @@ class UserRepository @Inject constructor(
         runCatching {
             legacy.continueWatchingAll().forEach { target.upsert(it) }
             legacy.favorites().first().forEach { target.addFavorite(it) }
+            // Moved, not copied: nothing is left outside the profiles to be moved again into another one.
+            legacy.clearProgress(); legacy.clearFavorites()
         }
         migrated.edit().putBoolean("legacy_done", true).apply()
     }
