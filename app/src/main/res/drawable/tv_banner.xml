@@ -1,6 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 320x180 Leanback banner placeholder: replace with a real PNG before release -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#0A0A0C"/>
-    <size android:width="320dp" android:height="180dp"/>
-</shape>
+<!-- NakashTV logo: the NT monogram in a gold frame (design/logos, option 08). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="320dp" android:height="180dp" android:viewportWidth="320" android:viewportHeight="180">
+    <path android:fillColor="#0B0B0F" android:pathData="M0,0h320v180h-320z"/>
+    <path android:pathData="M0,0h320v180h-320z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial" android:centerX="290" android:centerY="-20" android:gradientRadius="260" android:startColor="#663B1F6E" android:endColor="#003B1F6E"/>
+        </aapt:attr>
+    </path>
+    <group android:translateX="105" android:translateY="35" android:scaleX="1.1" android:scaleY="1.1">
+        <path android:fillColor="#0E0E13" android:strokeWidth="5"
+            android:pathData="M30,6 H70 A24,24 0 0 1 94,30 V70 A24,24 0 0 1 70,94 H30 A24,24 0 0 1 6,70 V30 A24,24 0 0 1 30,6 Z">
+            <aapt:attr name="android:strokeColor">
+                <gradient android:type="linear" android:startX="6" android:startY="6" android:endX="94" android:endY="94" android:startColor="#FFD27A" android:endColor="#E8962A"/>
+            </aapt:attr>
+        </path>
+        <path android:strokeWidth="8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M23,72 V30 L55,72 V30">
+            <aapt:attr name="android:strokeColor">
+                <gradient android:type="linear" android:startX="6" android:startY="6" android:endX="94" android:endY="94" android:startColor="#FFD27A" android:endColor="#E8962A"/>
+            </aapt:attr>
+        </path>
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="8" android:strokeLineCap="round" android:pathData="M41,30 H72"/>
+    </group>
+</vector>

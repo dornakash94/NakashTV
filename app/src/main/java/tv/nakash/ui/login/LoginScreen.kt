@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -108,7 +109,7 @@ fun LoginScreen(vm: LoginViewModel = hiltViewModel()) {
         val wide = maxWidth > 700.dp
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(40.dp)) {
         if(wide) Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(16.dp)) {
-            Text("NakashTV",style=MaterialTheme.typography.displayLarge,color=NakashColors.Accent)
+            androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(tv.nakash.R.drawable.ic_logo),"NakashTV",Modifier.size(112.dp))
             Text("המסך הגדול.\nכל מה שאוהבים לראות.",style=MaterialTheme.typography.headlineMedium)
             Text("התחבר עם הפרטים שקיבלת מספק הטלוויזיה שלך.",color=NakashColors.Muted)
         }
@@ -116,7 +117,7 @@ fun LoginScreen(vm: LoginViewModel = hiltViewModel()) {
             Modifier.widthIn(max = 440.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if(!wide) Text("NakashTV", style = MaterialTheme.typography.headlineMedium, color = NakashColors.Accent)
+            if(!wide) androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(tv.nakash.R.drawable.ic_logo), "NakashTV", Modifier.size(64.dp))
             Text("שלושה פרטים מהספק, פעם אחת.", style = MaterialTheme.typography.bodyLarge, color = NakashColors.Muted)
             val colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = NakashColors.Accent, unfocusedBorderColor = NakashColors.Muted,
