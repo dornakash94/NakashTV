@@ -119,10 +119,10 @@ fun ProfilePickerScreen(vm: ProfilePickerViewModel = hiltViewModel()) {
                 Text(pk.title, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
+        // The logo in the top corner, apart from the profiles (in the column it read as one more tile).
+        androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(tv.nakash.R.drawable.ic_logo), "NakashTV",
+            Modifier.align(Alignment.TopStart).padding(start = 48.dp, top = 36.dp).size(48.dp))
         Column(Modifier.align(Alignment.CenterStart).padding(start = 40.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            // The logo only (no title): the profiles say the rest.
-            androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(tv.nakash.R.drawable.ic_logo), "NakashTV", Modifier.padding(start = 68.dp).size(64.dp))
-            Spacer(Modifier.height(12.dp))
             val start = profiles.indexOfFirst { it.id == lastId }.coerceAtLeast(0)
             profiles.forEachIndexed { i, p ->
                 ProfileRow(p, if (i == start) Modifier.focusRequester(first) else Modifier, onFocus = { focusedId = p.id }, click = { vm.choose(p) }, edit = { editing = p })
