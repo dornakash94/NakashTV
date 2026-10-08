@@ -16,8 +16,8 @@ android {
         testInstrumentationRunner = "tv.nakash.TvSmokeRunner"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10
-        versionName = "0.4.0"
+        versionCode = 11
+        versionName = "0.4.1"
         buildConfigField("String", "USER_AGENT", "\"NakashTV/0.1 (Android TV)\"")
         // Built-in TMDB key so no one has to type it on the TV. Set `tmdb.apiKey=...` in local.properties (not in git)
         // or the NAKASHTV_TMDB_KEY environment variable on the build machine. Empty = TMDB extras off until set in Settings.

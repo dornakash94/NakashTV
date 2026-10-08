@@ -87,12 +87,8 @@ class ProfileStore @Inject constructor(@ApplicationContext private val ctx: Cont
     val visible get() = _all.value.filter { !it.deleted }
     private val dbs = HashMap<String, ProfileDb>()
 
-    init {
-        // First run with profiles: the existing history and list become the first profile's ("ראשי"). It is dated 0
-        // (oldest), so whatever the account already has on the server wins over it: a "ראשי" deleted or renamed on
-        // another TV stays that way instead of being brought back by a new install.
-        if (_all.value.isEmpty()) save(listOf(Profile("main", "ראשי", COLORS[0], updatedAt = 0)))
-    }
+    // No profile is ever made automatically: a new device shows the account's profiles from the server, and an
+    // account with none asks for its first one (made automatically, a default could revive one deleted elsewhere).
 
     fun choose(p: Profile) { _current.value = p; prefs.edit().putString("last", p.id).apply() }
     fun signOutProfile() { _current.value = null }

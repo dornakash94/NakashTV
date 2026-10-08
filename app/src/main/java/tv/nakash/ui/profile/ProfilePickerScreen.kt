@@ -63,14 +63,23 @@ class ProfilePickerViewModel @Inject constructor(
     /** Per profile, titles picked for it, shown in turn behind it on "מי צופה?". */
     val picks: StateFlow<Map<String, List<ProfilePick>>> = _picks
 
+    private val _loading = MutableStateFlow(store.visible.isEmpty())
+    /** True while a device with no profiles yet waits for the account's profiles from the server. */
+    val loading: StateFlow<Boolean> = _loading
+
     init {
-        viewModelScope.launch { user.migrateLegacy(); sync.syncNow(); sync.start() }
+        viewModelScope.launch { kotlinx.coroutines.withTimeoutOrNull(10_000) { sync.syncNow() }; _loading.value = false; sync.start() }
     }
     fun loadPicks() = viewModelScope.launch {
         store.visible.forEach { p -> runCatching { recs.picksFor(p.id) }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { _picks.value = _picks.value + (p.id to it) } }
     }
-    fun choose(p: Profile) = store.choose(p)
-    fun add(name: String, avatar: Int, url: String?) { store.add(name, avatar, url); viewModelScope.launch { sync.syncNow() } }
+    fun choose(p: Profile) { viewModelScope.launch { user.migrateLegacy(p.id) }; store.choose(p) }
+    /** A new profile; the account's first one is entered right away. */
+    fun add(name: String, avatar: Int, url: String?) {
+        val first = store.visible.isEmpty()
+        val p = store.add(name, avatar, url); viewModelScope.launch { sync.syncNow() }
+        if (first) choose(p)
+    }
     fun update(p: Profile, name: String, avatar: Int, url: String?) { store.update(p, name, avatar, url); viewModelScope.launch { sync.syncNow() } }
     fun remove(p: Profile) { store.remove(p); viewModelScope.launch { sync.syncNow() } }
 }
@@ -83,6 +92,7 @@ class ProfilePickerViewModel @Inject constructor(
 fun ProfilePickerScreen(vm: ProfilePickerViewModel = hiltViewModel()) {
     val all by vm.store.all.collectAsState()
     val picks by vm.picks.collectAsState()
+    val loading by vm.loading.collectAsState()
     val profiles = all.filter { !it.deleted }
     var editing by remember { mutableStateOf<Profile?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -92,6 +102,17 @@ fun ProfilePickerScreen(vm: ProfilePickerViewModel = hiltViewModel()) {
     LaunchedEffect(profiles.map { it.id }) { vm.loadPicks() }
     LaunchedEffect(profiles.size, editing, adding) { if (editing == null && !adding) { delay(150); runCatching { first.requestFocus() } } }
 
+    // No profiles on this device: wait for the account's (from the server), and if it has none, make the first one.
+    if (profiles.isEmpty()) {
+        if (loading) Box(Modifier.fillMaxSize()) {
+            PickerGlow(Modifier.fillMaxSize())
+            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(tv.nakash.R.drawable.ic_logo), "NakashTV", Modifier.size(72.dp))
+                Text("טוענים את הפרופילים…", color = Color.White.copy(alpha = .75f), fontSize = 18.sp)
+            }
+        } else ProfileEditor(null, vm, close = {}, onDelete = null, first = true) { n, a, u -> vm.add(n, a, u) }
+        return
+    }
     if (editing != null || adding) {
         val p = editing
         ProfileEditor(p, vm, close = { editing = null; adding = false },
@@ -181,7 +202,7 @@ private fun AddRow(click: () -> Unit) {
  * under it, and the profile as it will look on the left. "תמונת פרופיל" opens the avatar gallery.
  */
 @Composable
-private fun ProfileEditor(initial: Profile?, vm: ProfilePickerViewModel, close: () -> Unit, onDelete: (() -> Unit)?, save: (String, Int, String?) -> Unit) {
+private fun ProfileEditor(initial: Profile?, vm: ProfilePickerViewModel, close: () -> Unit, onDelete: (() -> Unit)?, first: Boolean = false, save: (String, Int, String?) -> Unit) {
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var avatar by remember { mutableStateOf(initial?.avatar ?: (vm.store.visible.size % AVATAR_COUNT)) }
     var url by remember { mutableStateOf(initial?.avatarUrl) }
@@ -192,7 +213,8 @@ private fun ProfileEditor(initial: Profile?, vm: ProfilePickerViewModel, close: 
     val pictureFocus = remember { FocusRequester() }
     val doneFocus = remember { FocusRequester() }
     var confirmDelete by remember { mutableStateOf(false) }
-    BackHandler(!gallery) { if (editingName && initial != null) editingName = false else close() }
+    // The account's first profile cannot be skipped (Back leaves the app as usual).
+    BackHandler(!gallery && !first) { if (editingName && initial != null) editingName = false else close() }
 
     if (gallery) {
         AvatarGallery(avatar, url, name, color, close = { gallery = false }) { a, u -> avatar = a; url = u; gallery = false }
@@ -203,8 +225,8 @@ private fun ProfileEditor(initial: Profile?, vm: ProfilePickerViewModel, close: 
     Box(Modifier.fillMaxSize()) {
         PickerGlow(Modifier.fillMaxSize())
         Column(Modifier.align(Alignment.CenterStart).padding(start = 72.dp).width(420.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(if (initial == null) "פרופיל חדש" else "עריכת פרופיל", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
-            Text("כאן בוחרים מה לשנות.", color = Color.White.copy(alpha = .7f), fontSize = 17.sp)
+            Text(if (first) "ברוכים הבאים!" else if (initial == null) "פרופיל חדש" else "עריכת פרופיל", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+            Text(if (first) "בואו ניצור את הפרופיל הראשון: שם ותמונה." else "כאן בוחרים מה לשנות.", color = Color.White.copy(alpha = .7f), fontSize = 17.sp)
             Spacer(Modifier.height(26.dp))
             if (editingName) SearchField(name, { name = it.take(20) }, "שם", Modifier.focusRequester(nameFocus).onFocusChanged { if (!it.hasFocus && name.isNotBlank()) editingName = false })
             else EditorItem(Icons.Outlined.Person, "שם", name.ifBlank { "ללא שם" }, Modifier) { editingName = true }
@@ -215,7 +237,7 @@ private fun ProfileEditor(initial: Profile?, vm: ProfilePickerViewModel, close: 
                 Pill("בוצע", primary = true, Modifier.focusRequester(doneFocus)) { save(name, avatar, url) }
                 if (onDelete != null) Pill(if (confirmDelete) "בטוח? לחיצה נוספת מוחקת" else "מחיקת פרופיל", primary = false,
                     Modifier.onFocusChanged { if (!it.isFocused) confirmDelete = false }) { if (confirmDelete) onDelete() else confirmDelete = true }
-                Pill("ביטול", primary = false, click = close)
+                if (!first) Pill("ביטול", primary = false, click = close)
             }
         }
         Column(Modifier.align(Alignment.CenterEnd).padding(end = 140.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(18.dp)) {

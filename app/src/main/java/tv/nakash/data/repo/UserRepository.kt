@@ -34,10 +34,10 @@ class UserRepository @Inject constructor(
     private val sync get() = db().sync()
     private fun <T> live(f: (UserDao) -> Flow<T>, empty: T): Flow<T> = profiles.current.flatMapLatest { p -> if (p == null) flowOf(empty) else f(profiles.db(p.id).user()) }
 
-    /** Once: the history and list kept before profiles existed become the first profile's. */
-    suspend fun migrateLegacy() {
+    /** Once: the history and list kept before profiles existed go to the first profile chosen (or created) here. */
+    suspend fun migrateLegacy(profileId: String) {
         if (migrated.getBoolean("legacy_done", false)) return
-        val target = profiles.db(profiles.visible.firstOrNull()?.id ?: "main").user()
+        val target = profiles.db(profileId).user()
         runCatching {
             legacy.continueWatchingAll().forEach { target.upsert(it) }
             legacy.favorites().first().forEach { target.addFavorite(it) }
