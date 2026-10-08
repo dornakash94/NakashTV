@@ -88,8 +88,10 @@ class ProfileStore @Inject constructor(@ApplicationContext private val ctx: Cont
     private val dbs = HashMap<String, ProfileDb>()
 
     init {
-        // First run with profiles: the existing history and list become the first profile's ("ראשי").
-        if (_all.value.isEmpty()) save(listOf(Profile("main", "ראשי", COLORS[0])))
+        // First run with profiles: the existing history and list become the first profile's ("ראשי"). It is dated 0
+        // (oldest), so whatever the account already has on the server wins over it: a "ראשי" deleted or renamed on
+        // another TV stays that way instead of being brought back by a new install.
+        if (_all.value.isEmpty()) save(listOf(Profile("main", "ראשי", COLORS[0], updatedAt = 0)))
     }
 
     fun choose(p: Profile) { _current.value = p; prefs.edit().putString("last", p.id).apply() }
