@@ -67,6 +67,7 @@ class PlayerController @Inject constructor(
     private val catalog: CatalogRepository,
     private val user: UserRepository,
     private val preview: PreviewPlayer,
+    private val profileSync: tv.nakash.data.profile.ProfileSync,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(PlayerUiState())
@@ -131,6 +132,7 @@ class PlayerController @Inject constructor(
                 p.addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         _state.update { it.copy(isPlaying = isPlaying) }
+                        profileSync.hold(isPlaying)
                         if(tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashPlayback","playing=$isPlaying")
                     }
                     override fun onRenderedFirstFrame() {

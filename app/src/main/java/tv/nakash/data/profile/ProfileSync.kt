@@ -60,9 +60,19 @@ class ProfileSync @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true }
     val enabled get() = base.isNotBlank()
 
+    /** True while a video plays: no sync then (on weak TV boxes its work showed as a small stutter every 30 s). */
+    @Volatile private var holding = false
+
     fun start() {
         if (!enabled || loop?.isActive == true) return
-        loop = scope.launch { while (isActive) { runCatching { syncNow() }; delay(30_000) } }
+        loop = scope.launch { while (isActive) { if (!holding) runCatching { syncNow() }; delay(30_000) } }
+    }
+
+    /** Called by the player: hold the sync while playing, and catch up as soon as playback stops or pauses. */
+    fun hold(playing: Boolean) {
+        if (holding == playing) return
+        holding = playing
+        if (!playing && enabled) scope.launch { runCatching { syncNow() } }
     }
 
     /** Push what changed here, then pull what changed elsewhere. True when the server answered. */
