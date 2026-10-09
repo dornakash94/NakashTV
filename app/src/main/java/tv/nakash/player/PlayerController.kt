@@ -117,7 +117,10 @@ class PlayerController @Inject constructor(
     private fun build(): ExoPlayer {
         val dsf = OkHttpDataSource.Factory(videoClient)
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 30_000, 750, 1_500) // fast zapping: start after 1.5s
+            // Continuous loading (min = max): the buffer is topped up all the time in small reads. With 15 s / 30 s it
+            // paused at 30 s and then pulled 15 s of video in one burst, which showed as a small freeze every ~20-30 s
+            // in movies and series on weak TV boxes. Start stays fast (playback begins after 0.75-1.5 s of video).
+            .setBufferDurationsMs(30_000, 30_000, 750, 1_500)
             .setPrioritizeTimeOverSizeThresholds(true).build()
         // Decoder fallback: if the TV's first decoder for a format fails to start, try the next one instead of an error.
         val renderers = androidx.media3.exoplayer.DefaultRenderersFactory(ctx).setEnableDecoderFallback(true)
