@@ -250,14 +250,15 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
         // Two fixed regions: the menu at the bottom, sized for every button it can have (so it is always fully on
         // screen and Play keeps its place when "טריילר"/"כותרים דומים" arrive), and the text above it, fitted to the
         // space that is left: a long title or plot gets a smaller size / fewer lines instead of pushing the menu away.
-        if(panel==null) Column(Modifier.align(Alignment.TopStart).fillMaxHeight().fillMaxWidth(.52f).padding(start=56.dp,end=8.dp,top=24.dp,bottom=28.dp)) {
-            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+        if(panel==null) Column(Modifier.align(Alignment.TopStart).fillMaxHeight().fillMaxWidth(.52f).padding(start=56.dp,end=8.dp,top=56.dp,bottom=28.dp)) {
+            // The text from the top (Netflix TV), the menu right under it; the text takes only the height it needs.
+            BoxWithConstraints(Modifier.weight(1f,fill=false).fillMaxWidth()) {
                 val avail=maxHeight
                 val boxW=maxWidth
                 val roomy=avail>=290.dp
                 val medium=!roomy && avail>=220.dp
                 val titleStyle=MaterialTheme.typography.displayLarge.copy(fontSize=if(roomy) 46.sp else if(medium) 38.sp else 34.sp,lineHeight=if(roomy) 52.sp else if(medium) 44.sp else 40.sp)
-                Column(Modifier.align(Alignment.BottomStart).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(8.dp,Alignment.Bottom)) {
+                Column(Modifier.align(Alignment.TopStart),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                     val plot=(movie?.plot ?: show?.plot)?.takeIf {it.isNotBlank()} ?: tmdb?.overview ?: ""
                     // A long plot needs the room more than a second title line does.
                     val titleLines=if(roomy || medium) 2 else 1
@@ -283,7 +284,7 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                     if(series && !busy && error==null && chosen==null) Text("אין פרקים זמינים כרגע",color=NakashColors.Muted)
                 }
             }
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(22.dp))
             val savedPosition=if(series) (progress.firstOrNull {it.refId==chosen?.id} ?: resume?.takeIf {it.refId==chosen?.id}) else resume
             val canResume=savedPosition!=null && !savedPosition.completed && savedPosition.positionMs>0
             val playLabel=when {
@@ -304,8 +305,9 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
             CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides keepClear) {
             Column(Modifier.width(400.dp).height(MenuRowH*3.5f+MenuGap*3).fadingEdges(menuScroll,fadePx).verticalScroll(menuScroll),verticalArrangement=Arrangement.spacedBy(MenuGap)) {
                 DetailMenuItem(androidx.compose.material.icons.Icons.Filled.PlayArrow,playLabel,::playChosen,Modifier.focusRequester(heroFocus),enabled=chosen!=null || movie!=null)
-                if(trailerKey!=null) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Theaters,"טריילר",{fullTrailer=true})
-                if(series) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.VideoLibrary,"פרקים נוספים",{panel="episodes"})
+                // A series' trailer is under "פרקים ועוד" › "טריילרים ועוד" (Netflix); a movie keeps it here.
+                if(!series && trailerKey!=null) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Theaters,"טריילר",{fullTrailer=true})
+                if(series) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.VideoLibrary,"פרקים ועוד",{panel="episodes"})
                 if(similar.isNotEmpty()) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.GridView,"כותרים דומים",{panel="similar"})
                 DetailMenuItem(if(favorite) androidx.compose.material.icons.Icons.Filled.Check else androidx.compose.material.icons.Icons.Filled.Add,if(favorite) "ברשימה שלי" else "הוסף לרשימה שלי",{scope.launch {vm.user.toggleFavorite(if(series) "series" else "movie",id.toString())}})
                 DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Info,"תיאור, שחקנים ופרטים",{panel="details"})
