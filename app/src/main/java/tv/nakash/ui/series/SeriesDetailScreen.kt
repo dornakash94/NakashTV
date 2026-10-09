@@ -12,6 +12,12 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.*
@@ -69,6 +75,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.focusable
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:LibraryViewModel=hiltViewModel()) {
     val detailEntry=remember(nav,id,series) {requireNotNull(nav.currentBackStackEntry)}
@@ -284,14 +291,25 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                 canResume -> "המשך צפייה · נותרו ${((savedPosition!!.durationMs-savedPosition.positionMs).coerceAtLeast(0)/60000)} דק׳"
                 else -> "הפעל"
             }
-            val slots=if(series) 6 else 5
-            Column(Modifier.width(400.dp).height(MenuRowH*slots+MenuGap*(slots-1)),verticalArrangement=Arrangement.spacedBy(MenuGap)) {
+            // The menu scrolls (Netflix TV): about three and a half rows show, the focused one is kept clear of the
+            // edges and the rows beyond fade out, so the text above gets the room instead of a block sized for all.
+            val menuScroll=androidx.compose.foundation.rememberScrollState()
+            val fadePx=with(density) {30.dp.toPx()}
+            val keepClear=remember(fadePx) {object : androidx.compose.foundation.gestures.BringIntoViewSpec {
+                override fun calculateScrollDistance(offset:Float,size:Float,containerSize:Float):Float {
+                    val lead=offset-fadePx; val trail=offset+size+fadePx-containerSize
+                    return when {lead<0f -> lead; trail>0f -> trail; else -> 0f}
+                }
+            }}
+            CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides keepClear) {
+            Column(Modifier.width(400.dp).height(MenuRowH*3.5f+MenuGap*3).fadingEdges(menuScroll,fadePx).verticalScroll(menuScroll),verticalArrangement=Arrangement.spacedBy(MenuGap)) {
                 DetailMenuItem(androidx.compose.material.icons.Icons.Filled.PlayArrow,playLabel,::playChosen,Modifier.focusRequester(heroFocus),enabled=chosen!=null || movie!=null)
                 if(trailerKey!=null) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Theaters,"טריילר",{fullTrailer=true})
                 if(series) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.VideoLibrary,"פרקים נוספים",{panel="episodes"})
                 if(similar.isNotEmpty()) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.GridView,"כותרים דומים",{panel="similar"})
                 DetailMenuItem(if(favorite) androidx.compose.material.icons.Icons.Filled.Check else androidx.compose.material.icons.Icons.Filled.Add,if(favorite) "ברשימה שלי" else "הוסף לרשימה שלי",{scope.launch {vm.user.toggleFavorite(if(series) "series" else "movie",id.toString())}})
-                DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Info,"פרטים ושחקנים",{panel="details"})
+                DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Info,"תיאור, שחקנים ופרטים",{panel="details"})
+            }
             }
         }
         if(plotOpen && panel==null) PlotOverlay(title,meta,(movie?.plot ?: show?.plot)?.takeIf {it.isNotBlank()} ?: tmdb?.overview ?: "",
@@ -299,13 +317,15 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
             movie?.director?.takeIf {it.isNotBlank()}) {plotOpen=false;scope.launch {kotlinx.coroutines.delay(50);runCatching {heroFocus.requestFocus()}}}
         if(panel=="similar") SimilarPanel(title,meta,similar,panelFocus) {nav.navigate(it)}
         if(fullTrailer && trailerKey!=null) FullTrailer(trailerKey,{fullTrailer=false;interaction++},{trailerFailed=true})
-        if(panel=="episodes" || panel=="details") {
+        if(panel=="episodes") EpisodesPanel(title,meta,seasons,selectedSeason,{season=it},episodes,progress,chosen?.id,busy,show?.backdrop ?: show?.cover,
+            trailerKey!=null,{fullTrailer=true},panelFocus,::play) {e,watched -> scope.launch {if(watched) vm.user.remove("episode",e.id) else vm.user.markWatched("episode",e.id,id,(e.durationSec ?: 0)*1000L)}}
+        if(panel=="details") {
             Column(Modifier.fillMaxSize().background(NakashColors.Bg.copy(.98f)).padding(32.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
-                    Column {Text(movie?.title ?: show?.title ?: "",style=MaterialTheme.typography.headlineMedium);Text(if(panel=="episodes") "פרקים ועונות" else if(series) "על הסדרה" else "על הסרט",color=NakashColors.Muted)}
+                    Column {Text(movie?.title ?: show?.title ?: "",style=MaterialTheme.typography.headlineMedium);Text(if(series) "על הסדרה" else "על הסרט",color=NakashColors.Muted)}
                     Action("חזרה",{panel=null},Modifier.focusRequester(panelFocus))
                 }
-                if(panel=="details") {
+                run {
                     LazyColumn(verticalArrangement=Arrangement.spacedBy(20.dp)) {
                         item {Text((movie?.plot ?: show?.plot)?.takeIf {it.isNotBlank()} ?: tmdb?.overview ?: "אין תקציר זמין",style=MaterialTheme.typography.bodyLarge)}
                         val people=tmdb?.cast.orEmpty()
@@ -338,57 +358,88 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                         }
                         item {Action(if(favorite) "✓ ברשימה שלי" else "+ לרשימה שלי",{scope.launch {vm.user.toggleFavorite(if(series) "series" else "movie",id.toString())}})}
                     }
-                } else {
-                    // Seasons as pills (focus picks the season), then the season's episodes as cards: picture with the
-                    // watched bar, "פרק N · name", plot, length. OK plays; long press marks watched / not watched.
-                    LazyRow(horizontalArrangement=Arrangement.spacedBy(10.dp),contentPadding=PaddingValues(vertical=4.dp)) {
-                        items(seasons,key={it.id}) {s ->
-                            val on=s.number==selectedSeason
-                            Surface(onClick={season=s.number},modifier=Modifier.height(42.dp).onFocusChanged {if(it.isFocused) season=s.number},
-                                shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(21.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1.05f),
-                                colors=ClickableSurfaceDefaults.colors(containerColor=if(on) Color.White.copy(.22f) else NakashColors.S1,focusedContainerColor=Color.White,contentColor=Color.White,focusedContentColor=Color.Black)) {
-                                Box(Modifier.fillMaxHeight().padding(horizontal=20.dp),contentAlignment=Alignment.Center) {Text(s.name,style=MaterialTheme.typography.titleMedium.copy(fontSize=17.sp))}
-                            }
-                        }
-                    }
-                    LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(vertical=6.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-                        if(busy && episodes.isEmpty()) item {Text("טוענים פרקים…",color=NakashColors.Muted)}
-                        if(!busy && episodes.isEmpty()) item {Text("לא נמצאו פרקים בעונה הזו",color=NakashColors.Muted)}
-                        items(episodes,key={it.id}) {e ->
-                            val saved=progress.firstOrNull {it.refId==e.id}
-                            val isNext=e.id==chosen?.id
-                            Surface(onClick={play(e)},onLongClick={scope.launch {if(saved?.completed==true) vm.user.remove("episode",e.id) else vm.user.markWatched("episode",e.id,id,(e.durationSec ?: 0)*1000L)}},
-                                modifier=Modifier.fillMaxWidth(),shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(14.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1.01f),
-                                colors=ClickableSurfaceDefaults.colors(containerColor=NakashColors.S1,focusedContainerColor=NakashColors.S3,contentColor=Color.White,focusedContentColor=Color.White),
-                                border=ClickableSurfaceDefaults.border(focusedBorder=androidx.tv.material3.Border(androidx.compose.foundation.BorderStroke(2.dp,Color.White),shape=RoundedCornerShape(14.dp)))) {
-                                Row(Modifier.padding(10.dp),horizontalArrangement=Arrangement.spacedBy(18.dp),verticalAlignment=Alignment.CenterVertically) {
-                                    Box(Modifier.width(192.dp).height(108.dp).clip(RoundedCornerShape(10.dp)).background(NakashColors.S2)) {
-                                        AsyncImage(e.image ?: show?.backdrop ?: show?.cover,null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
-                                        if(saved!=null && saved.durationMs>0) androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
-                                            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(4.dp).background(Color.White.copy(.25f))) {
-                                                Box(Modifier.fillMaxWidth(if(saved.completed) 1f else (saved.positionMs.toFloat()/saved.durationMs).coerceIn(0f,1f)).fillMaxHeight().background(NakashColors.Live))
-                                            }
-                                        }
-                                        if(saved?.completed==true) Box(Modifier.align(Alignment.TopEnd).padding(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color.Black.copy(.6f)).padding(horizontal=8.dp,vertical=2.dp)) {Text("✓ נצפה",style=MaterialTheme.typography.labelSmall)}
-                                    }
-                                    Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(5.dp)) {
-                                        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                                            Text("פרק ${e.number}"+(e.title.takeIf {it.isNotBlank() && !it.matches(Regex(".*(פרק|Episode|E)\\s*0*${e.number}\\b.*"))}?.let {" · "+tv.nakash.util.isolate(it)} ?: ""),
-                                                style=MaterialTheme.typography.titleLarge.copy(fontSize=18.sp),maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f,false))
-                                            if(isNext) Text(if(saved!=null && !saved.completed) "ממשיכים מכאן" else "הבא",color=NakashColors.Accent,style=MaterialTheme.typography.labelLarge)
-                                        }
-                                        e.plot?.takeIf {it.isNotBlank()}?.let {Text(it,maxLines=2,overflow=TextOverflow.Ellipsis,color=NakashColors.Muted,style=MaterialTheme.typography.bodyMedium.copy(fontSize=15.sp,lineHeight=20.sp))}
-                                        listOfNotNull(e.durationSec?.let {"${it/60} דקות"},saved?.takeIf {!it.completed && it.durationMs>0}?.let {"נותרו ${(it.durationMs-it.positionMs).coerceAtLeast(0)/60000} דק׳"}).takeIf {it.isNotEmpty()}?.let {
-                                            Text(it.joinToString("  ·  "),color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge)
-                                        }
-                                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * "פרקים ועוד" (Netflix TV style): the title on the right with the seasons as a list (focus picks one) and
+ * "טריילרים ועוד"; the season's episodes scroll on the left, each a big picture ("עונה S – פרק N" on it, the watched
+ * bar, ✓) beside its name, plot and length. OK plays; long press marks watched / not watched.
+ */
+@Composable
+private fun EpisodesPanel(title:String,meta:String,seasons:List<tv.nakash.data.local.SeasonEntity>,selectedSeason:Int,pickSeason:(Int)->Unit,
+                          episodes:List<tv.nakash.data.local.EpisodeEntity>,progress:List<tv.nakash.data.local.WatchProgressEntity>,chosenId:String?,busy:Boolean,
+                          fallbackImage:String?,hasTrailer:Boolean,openTrailer:()->Unit,firstFocus:FocusRequester,
+                          play:(tv.nakash.data.local.EpisodeEntity)->Unit,toggleWatched:(tv.nakash.data.local.EpisodeEntity,Boolean)->Unit) {
+    Row(Modifier.fillMaxSize().background(Color.Black.copy(alpha=.95f)).padding(start=56.dp,end=40.dp,top=48.dp)) {
+        Column(Modifier.weight(.34f).padding(top=40.dp,end=24.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+            Text(title,style=MaterialTheme.typography.displayLarge.copy(fontSize=40.sp,lineHeight=46.sp),maxLines=2,overflow=TextOverflow.Ellipsis)
+            Text(meta,color=Color.White.copy(alpha=.8f),style=MaterialTheme.typography.titleLarge.copy(fontSize=16.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
+            Spacer(Modifier.height(20.dp))
+            LazyColumn(verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                items(seasons,key={it.id}) {s ->
+                    SectionItem(if(seasons.size==1) "כל הפרקים" else s.name,"${s.episodeCount.takeIf {it>0} ?: ""} פרקים".trim(),s.number==selectedSeason,
+                        onFocus={pickSeason(s.number)},click={pickSeason(s.number)})
+                }
+                if(hasTrailer) item("trailers") {SectionItem("טריילרים ועוד","סרטון אחד",false,onFocus={},click=openTrailer)}
+            }
+        }
+        val anchor=episodes.indexOfFirst {it.id==chosenId}.coerceAtLeast(0)
+        LazyColumn(Modifier.weight(.66f).fillMaxHeight(),state=rememberLazyListState(anchor),contentPadding=PaddingValues(top=24.dp,bottom=220.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
+            if(busy && episodes.isEmpty()) item {Text("טוענים פרקים…",color=NakashColors.Muted)}
+            if(!busy && episodes.isEmpty()) item {Text("לא נמצאו פרקים בעונה הזו",color=NakashColors.Muted)}
+            itemsIndexed(episodes,key={_,e -> e.id}) {i,e ->
+                val saved=progress.firstOrNull {it.refId==e.id}
+                val isNext=e.id==chosenId
+                var focused by remember {mutableStateOf(false)}
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(24.dp)) {
+                    Surface(onClick={play(e)},onLongClick={toggleWatched(e,saved?.completed==true)},
+                        modifier=Modifier.width(300.dp).height(169.dp).then(if(i==anchor) Modifier.focusRequester(firstFocus) else Modifier).onFocusChanged {f -> focused=f.isFocused},
+                        shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1.04f),
+                        colors=ClickableSurfaceDefaults.colors(containerColor=NakashColors.Tile,focusedContainerColor=NakashColors.Tile),
+                        border=ClickableSurfaceDefaults.border(focusedBorder=Border(androidx.compose.foundation.BorderStroke(3.dp,Color.White),shape=RoundedCornerShape(10.dp)))) {
+                        Box(Modifier.fillMaxSize()) {
+                            AsyncImage(e.image ?: fallbackImage,null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
+                            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.55f to Color.Transparent,1f to Color.Black.copy(alpha=.75f))))
+                            Text("עונה ${e.season} – פרק ${e.number}",style=MaterialTheme.typography.titleMedium.copy(fontSize=16.sp),modifier=Modifier.align(Alignment.BottomStart).padding(start=12.dp,bottom=12.dp))
+                            if(saved?.completed==true) Box(Modifier.align(Alignment.TopEnd).padding(8.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color.Black.copy(.6f)).padding(horizontal=8.dp,vertical=2.dp)) {Text("✓ נצפה",style=MaterialTheme.typography.labelSmall)}
+                            if(saved!=null && saved.durationMs>0) androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
+                                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(4.dp).background(Color.White.copy(.25f))) {
+                                    Box(Modifier.fillMaxWidth(if(saved.completed) 1f else (saved.positionMs.toFloat()/saved.durationMs).coerceIn(0f,1f)).fillMaxHeight().background(NakashColors.Live))
                                 }
                             }
                         }
-                        item {Text("לחיצה ארוכה על פרק מסמנת אותו כנצפה / לא נצפה",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(top=6.dp))}
+                    }
+                    Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                            val name=e.title.takeIf {it.isNotBlank() && !it.matches(Regex(".*(פרק|Episode|E)\\s*0*${e.number}\\b.*"))}?.let {tv.nakash.util.isolate(it)} ?: "פרק ${e.number}"
+                            Text(name,style=MaterialTheme.typography.titleLarge.copy(fontSize=20.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.Bold),maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f,false))
+                            if(isNext) Text(if(saved!=null && !saved.completed) "ממשיכים מכאן" else "הבא",color=NakashColors.Accent,style=MaterialTheme.typography.labelLarge)
+                        }
+                        e.plot?.takeIf {it.isNotBlank()}?.let {Text(it,color=Color.White.copy(alpha=if(focused) .92f else .7f),style=MaterialTheme.typography.bodyLarge.copy(fontSize=15.sp,lineHeight=21.sp),maxLines=4,overflow=TextOverflow.Ellipsis)}
+                        listOfNotNull(e.durationSec?.let {"(${it/60} דקות)"},saved?.takeIf {!it.completed && it.durationMs>0}?.let {"נותרו ${(it.durationMs-it.positionMs).coerceAtLeast(0)/60000} דק׳"}).takeIf {it.isNotEmpty()}?.let {
+                            Text(it.joinToString("  ·  "),color=Color.White.copy(alpha=.7f),style=MaterialTheme.typography.labelLarge.copy(fontSize=14.sp))
+                        }
                     }
                 }
             }
+            item {Text("לחיצה ארוכה על פרק מסמנת אותו כנצפה / לא נצפה",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(top=4.dp))}
+        }
+    }
+}
+
+/** A section of the episodes panel's right column: name and count; the chosen one stays lit, focus is white. */
+@Composable
+private fun SectionItem(name:String,count:String,selected:Boolean,onFocus:()->Unit,click:()->Unit) {
+    Surface(onClick=click,modifier=Modifier.fillMaxWidth().height(48.dp).onFocusChanged {if(it.isFocused) onFocus()},
+        shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(24.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1.02f),
+        colors=ClickableSurfaceDefaults.colors(containerColor=if(selected) Color.White.copy(alpha=.22f) else Color.Transparent,contentColor=Color.White,focusedContainerColor=Color.White,focusedContentColor=Color.Black)) {
+        Row(Modifier.fillMaxSize().padding(horizontal=20.dp),verticalAlignment=Alignment.CenterVertically) {
+            Text(name,style=MaterialTheme.typography.titleLarge.copy(fontSize=17.sp),maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f))
+            Text(count,style=MaterialTheme.typography.titleLarge.copy(fontSize=15.sp),modifier=Modifier.alpha(.75f))
         }
     }
 }
@@ -417,7 +468,7 @@ private fun FullTrailer(key:String,close:()->Unit,failed:()->Unit) {
 private data class SimilarItem(val route:String,val title:String,val image:String?,val meta:String,val plot:String?)
 
 /** Netflix-style menu line: icon and label; the focused one becomes a white pill. */
-private val MenuRowH=42.dp
+private val MenuRowH=46.dp
 private val MenuGap=2.dp
 
 @Composable
@@ -534,3 +585,13 @@ private fun PlotOverlay(title:String,meta:String,plot:String,cast:List<String>,d
         }
     }
 }
+
+/** Fades the content out at the top edge once scrolled and at the bottom edge while more follows. */
+private fun Modifier.fadingEdges(scroll:androidx.compose.foundation.ScrollState,fadePx:Float)=this
+    .graphicsLayer {compositingStrategy=androidx.compose.ui.graphics.CompositingStrategy.Offscreen}
+    .drawWithContent {
+        drawContent()
+        val f=(fadePx/size.height).coerceIn(0f,.5f)
+        if(scroll.value>0) drawRect(Brush.verticalGradient(0f to Color.Transparent,f to Color.Black),blendMode=androidx.compose.ui.graphics.BlendMode.DstIn)
+        if(scroll.canScrollForward) drawRect(Brush.verticalGradient(1f-f to Color.Black,1f to Color.Transparent),blendMode=androidx.compose.ui.graphics.BlendMode.DstIn)
+    }
