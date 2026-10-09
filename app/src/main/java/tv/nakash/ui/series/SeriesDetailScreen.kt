@@ -640,7 +640,8 @@ private fun RateButton(label:String,selected:Boolean,click:()->Unit,icon:@Compos
     Box {
         Surface(onClick=click,modifier=Modifier.size(52.dp).onFocusChanged {focused=it.isFocused},
             shape=ClickableSurfaceDefaults.shape(androidx.compose.foundation.shape.CircleShape),scale=ClickableSurfaceDefaults.scale(focusedScale=1.1f),
-            colors=ClickableSurfaceDefaults.colors(containerColor=if(selected) Color.White.copy(alpha=.24f) else Color.White.copy(alpha=.08f),contentColor=Color.White,
+            // No circle until focused (Netflix); the chosen rating shows by its filled icon.
+            colors=ClickableSurfaceDefaults.colors(containerColor=Color.Transparent,contentColor=Color.White,
                 focusedContainerColor=Color.White,focusedContentColor=Color.Black)) {
             Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {icon()}
         }
