@@ -46,4 +46,23 @@ class RecommenderTest {
         assertThat(Curated.rows(items, false, LocalDate.of(2026, 10, 8)).first { it.key == "c_comedy" }.ids).isEqualTo(comedy.ids)
         assertThat(day1.first { it.key == "c_short" }.ids).isNotEmpty()
     }
+
+    private fun rated(id: Int, v: Int) = tv.nakash.data.profile.RatingEntity("movie:$id", "movie", "$id", v, now)
+
+    @Test fun ratingsShapeTheTasteAndHideTheTitle() {
+        val movies = listOf(movie(1, "קומדיה"), movie(2, "אימה"), movie(3, "קומדיה"), movie(4, "אימה"))
+        val h = Recommender.History(emptyList(), emptyList(), listOf(rated(1, 2), rated(2, -1)))
+        val a = Recommender.genreAffinity(h, movies, emptyList(), now)
+        assertThat(a["קומדיה"]).isEqualTo(1.0)
+        assertThat(a["אימה"]!!).isLessThan(0.0)
+        assertThat(h.isEmpty).isFalse()
+        assertThat(h.seenKeys()).containsAtLeast("movie:1", "movie:2")
+    }
+
+    @Test fun lovedTitlesLeadTheSeedsAndDislikedNeverSeed() {
+        val movies = listOf(movie(1, "קומדיה"), movie(2, "דרמה"), movie(3, "אימה"))
+        val h = Recommender.History(listOf(watched(2), watched(3)), emptyList(), listOf(rated(1, 2), rated(3, -1)))
+        val seeds = Recommender.seeds(h, movies, emptyList()).map { (it as MovieLite).id }
+        assertThat(seeds).containsExactly(1, 2).inOrder()
+    }
 }

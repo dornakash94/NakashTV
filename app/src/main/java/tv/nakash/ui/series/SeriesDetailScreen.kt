@@ -12,6 +12,12 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.material.icons.outlined.ThumbDown
+import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.outlined.RemoveCircleOutline
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.draw.drawWithContent
@@ -89,6 +95,7 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
     val episodes by remember(id,selectedSeason) {vm.catalog.episodes(id,selectedSeason)}.collectAsState(emptyList())
     val progress by remember(id) {vm.user.progressForSeries(id)}.collectAsState(emptyList())
     val favorite by remember(id) {vm.user.isFavorite(if(series) "series" else "movie",id.toString())}.collectAsState(false)
+    val rating by remember(id) {vm.user.rating(if(series) "series" else "movie",id.toString())}.collectAsState(null)
     var resume by remember(id) {mutableStateOf<WatchProgressEntity?>(null)}
     var chosen by remember(id) {mutableStateOf<EpisodeEntity?>(null)}
     var excerpt by remember(id) {mutableStateOf<EpisodeEntity?>(null)}
@@ -290,7 +297,21 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                     if(series && !busy && error==null && chosen==null) Text("אין פרקים זמינים כרגע",color=NakashColors.Muted)
                 }
             }
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(16.dp))
+            // Netflix-style rating; it feeds the profile's recommendations (and syncs). Pressing the chosen one again clears it.
+            Row(horizontalArrangement=Arrangement.spacedBy(14.dp),verticalAlignment=Alignment.CenterVertically) {
+                fun rate(v:Int) {scope.launch {vm.user.setRating(if(series) "series" else "movie",id.toString(),if(rating==v) null else v)}}
+                RateButton("לא בשבילי",rating==-1,{rate(-1)}) {Icon(if(rating==-1) androidx.compose.material.icons.Icons.Filled.ThumbDown else androidx.compose.material.icons.Icons.Outlined.ThumbDown,null,Modifier.size(24.dp))}
+                RateButton("אהבתי",rating==1,{rate(1)}) {Icon(if(rating==1) androidx.compose.material.icons.Icons.Filled.ThumbUp else androidx.compose.material.icons.Icons.Outlined.ThumbUp,null,Modifier.size(24.dp))}
+                RateButton("ממש אהבתי!",rating==2,{rate(2)}) {
+                    val icon=if(rating==2) androidx.compose.material.icons.Icons.Filled.ThumbUp else androidx.compose.material.icons.Icons.Outlined.ThumbUp
+                    Box(Modifier.size(30.dp)) {
+                        Icon(icon,null,Modifier.size(20.dp).align(Alignment.BottomStart))
+                        Icon(icon,null,Modifier.size(20.dp).align(Alignment.TopEnd))
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
             val savedPosition=if(series) (progress.firstOrNull {it.refId==chosen?.id} ?: resume?.takeIf {it.refId==chosen?.id}) else resume
             val canResume=savedPosition!=null && !savedPosition.completed && savedPosition.positionMs>0
             val playLabel=when {
@@ -611,3 +632,20 @@ private fun Modifier.fadingEdges(scroll:androidx.compose.foundation.ScrollState,
         if(scroll.value>0) drawRect(Brush.verticalGradient(0f to Color.Transparent,f to Color.Black),blendMode=androidx.compose.ui.graphics.BlendMode.DstIn)
         if(scroll.canScrollForward) drawRect(Brush.verticalGradient(1f-f to Color.Black,1f to Color.Transparent),blendMode=androidx.compose.ui.graphics.BlendMode.DstIn)
     }
+
+/** A round rating button; its name shows in a bubble above it while focused (Netflix TV). */
+@Composable
+private fun RateButton(label:String,selected:Boolean,click:()->Unit,icon:@Composable ()->Unit) {
+    var focused by remember {mutableStateOf(false)}
+    Box {
+        Surface(onClick=click,modifier=Modifier.size(52.dp).onFocusChanged {focused=it.isFocused},
+            shape=ClickableSurfaceDefaults.shape(androidx.compose.foundation.shape.CircleShape),scale=ClickableSurfaceDefaults.scale(focusedScale=1.1f),
+            colors=ClickableSurfaceDefaults.colors(containerColor=if(selected) Color.White.copy(alpha=.24f) else Color.White.copy(alpha=.08f),contentColor=Color.White,
+                focusedContainerColor=Color.White,focusedContentColor=Color.Black)) {
+            Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {icon()}
+        }
+        if(focused) Text(label,color=Color.Black,style=MaterialTheme.typography.labelLarge.copy(fontSize=14.sp),maxLines=1,
+            modifier=Modifier.align(Alignment.TopCenter).offset(y=(-44).dp).wrapContentSize(unbounded=true)
+                .background(Color.White,RoundedCornerShape(8.dp)).padding(horizontal=12.dp,vertical=6.dp))
+    }
+}

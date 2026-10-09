@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import tv.nakash.data.local.FavoriteEntity
 import tv.nakash.data.local.UserDao
 import tv.nakash.data.local.WatchProgressEntity
@@ -96,6 +97,16 @@ class UserRepository @Inject constructor(
     suspend fun remove(kind: String, refId: String) {
         val key = "$kind:$refId"
         if (dao.progress(key) != null) { dao.remove(key); sync.tombstone(TombstoneEntity(key, "progress", System.currentTimeMillis())) }
+    }
+
+    // ---- ratings ("לא בשבילי" -1 / "אהבתי" 1 / "ממש אהבתי!" 2)
+    fun rating(kind: String, refId: String): Flow<Int?> =
+        profiles.current.flatMapLatest { p -> if (p == null) flowOf(null) else profiles.db(p.id).sync().rating("$kind:$refId").map { it?.value } }
+    /** Sets the rating, or clears it with null (the clearing syncs to the other devices too). */
+    suspend fun setRating(kind: String, refId: String, value: Int?) {
+        val key = "$kind:$refId"
+        if (value == null) { sync.removeRating(key); sync.tombstone(TombstoneEntity(key, "rating", System.currentTimeMillis())) }
+        else { sync.clearTombstone(key, "rating"); sync.putRating(tv.nakash.data.profile.RatingEntity(key, kind, refId, value, System.currentTimeMillis())) }
     }
 
     // ---- searches

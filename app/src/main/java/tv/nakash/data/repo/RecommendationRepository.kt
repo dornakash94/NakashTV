@@ -44,8 +44,8 @@ class RecommendationRepository @Inject constructor(
     }
 
     private suspend fun history(profileId: String): Recommender.History {
-        val dao = profiles.db(profileId).user()
-        return Recommender.History(dao.continueWatchingAll(), dao.favorites().first())
+        val db = profiles.db(profileId)
+        return Recommender.History(db.user().continueWatchingAll(), db.user().favorites().first(), db.sync().ratings())
     }
 
     /** The personal rows for Home, best first. Empty for a profile with no history yet. */
@@ -133,12 +133,14 @@ class RecommendationRepository @Inject constructor(
 
 /** The pure part of the personal recommendations (no I/O), so it can be tested. */
 object Recommender {
-    data class History(val progress: List<WatchProgressEntity>, val favorites: List<FavoriteEntity>) {
-        val isEmpty get() = progress.none { it.kind != "channel" } && favorites.none { it.kind != "channel" }
-        /** "movie:<id>" / "series:<id>" of everything the profile already watched or saved. */
+    data class History(val progress: List<WatchProgressEntity>, val favorites: List<FavoriteEntity>,
+                       val ratings: List<tv.nakash.data.profile.RatingEntity> = emptyList()) {
+        val isEmpty get() = progress.none { it.kind != "channel" } && favorites.none { it.kind != "channel" } && ratings.isEmpty()
+        /** "movie:<id>" / "series:<id>" of everything the profile already watched, saved or rated (never recommended again). */
         fun seenKeys(): Set<String> = buildSet {
             progress.forEach { p -> when (p.kind) { "movie" -> add("movie:${p.refId}"); "episode" -> p.seriesId?.let { add("series:$it") } } }
             favorites.forEach { f -> if (f.kind == "movie" || f.kind == "series") add("${f.kind}:${f.refId}") }
+            ratings.forEach { add(it.key) }
         }
     }
 
@@ -148,7 +150,12 @@ object Recommender {
     fun seeds(h: History, movies: List<MovieLite>, series: List<SeriesLite>): List<Any> {
         val movieById = movies.associateBy { it.id }; val seriesById = series.associateBy { it.id }
         val seen = mutableSetOf<String>()
-        return h.progress.sortedByDescending { it.updatedAt }.filter { it.completed || it.durationMs <= 0 || it.positionMs > it.durationMs / 5 || it.kind == "episode" }
+        // "ממש אהבתי" titles lead ("כי צפית ב…" starts from what the profile loved), then what it watched; never a disliked one.
+        val disliked = h.ratings.filter { it.value < 0 }.map { it.key }.toSet()
+        val loved = h.ratings.filter { it.value >= 2 }.sortedByDescending { it.at }.mapNotNull { r ->
+            when (r.kind) { "movie" -> r.refId.toIntOrNull()?.let { movieById[it] }?.takeIf { seen.add("m${it.id}") }; "series" -> r.refId.toIntOrNull()?.let { seriesById[it] }?.takeIf { seen.add("s${it.id}") }; else -> null }
+        }
+        return loved + h.progress.sortedByDescending { it.updatedAt }.filter { p -> (if (p.kind == "episode") "series:${p.seriesId}" else "${p.kind}:${p.refId}") !in disliked }.filter { it.completed || it.durationMs <= 0 || it.positionMs > it.durationMs / 5 || it.kind == "episode" }
             .mapNotNull { p ->
                 when (p.kind) {
                     "movie" -> p.refId.toIntOrNull()?.let { movieById[it] }?.takeIf { seen.add("m${it.id}") }
@@ -180,7 +187,15 @@ object Recommender {
                 "series" -> f.refId.toIntOrNull()?.let { seriesById[it] }?.let { add(it.genres, 2.0) }
             }
         }
-        val top = score.values.maxOrNull() ?: return emptyMap()
+        // Ratings: "ממש אהבתי" counts most, "אהבתי" like a saved title, "לא בשבילי" pulls its genres down.
+        h.ratings.forEach { r ->
+            val w = when { r.value >= 2 -> 3.0; r.value == 1 -> 1.5; else -> -2.0 }
+            when (r.kind) {
+                "movie" -> r.refId.toIntOrNull()?.let { movieById[it] }?.let { add(it.genres, w) }
+                "series" -> r.refId.toIntOrNull()?.let { seriesById[it] }?.let { add(it.genres, w) }
+            }
+        }
+        val top = score.values.maxOrNull()?.takeIf { it > 0 } ?: return emptyMap()
         return score.mapValues { it.value / top }
     }
 

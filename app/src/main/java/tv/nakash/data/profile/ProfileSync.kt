@@ -98,6 +98,7 @@ class ProfileSync @Inject constructor(
                 s.progressSince(since).forEach { add(item(p.id, "progress", it.key, progressJson(it), false, it.updatedAt)) }
                 s.favoritesSince(since).forEach { add(item(p.id, "fav", it.key, buildJsonObject { put("kind", it.kind); put("refId", it.refId) }, false, it.addedAt)) }
                 s.searchesSince(since).forEach { add(item(p.id, "search", it.query, JsonObject(emptyMap()), false, it.at)) }
+                s.ratingsSince(since).forEach { add(item(p.id, "rating", it.key, buildJsonObject { put("kind", it.kind); put("refId", it.refId); put("value", it.value) }, false, it.at)) }
                 s.tombstonesSince(since).forEach { add(item(p.id, it.kind, it.key, null, true, it.at)) }
             }
         }
@@ -135,6 +136,9 @@ class ProfileSync @Inject constructor(
                 "progress" -> if (deleted) s.deleteProgressOlder(k, at) else if ((s.progressTime(k) ?: 0) < at && data != null) progressFrom(k, data, at)?.let { p -> s.putProgress(p) }
                 "fav" -> if (deleted) s.deleteFavoriteOlder(k, at) else data?.let { d -> s.putFavorite(FavoriteEntity(k, d.str("kind") ?: k.substringBefore(':'), d.str("refId") ?: k.substringAfter(':'), at)) }
                 "search" -> if (deleted) s.deleteSearchOlder(k, at) else s.addSearch(SearchEntity(k, at))
+                "rating" -> if (deleted) s.deleteRatingOlder(k, at) else if ((s.ratingTime(k) ?: 0) < at) data?.let { d ->
+                    (d["value"] as? JsonPrimitive)?.intOrNull?.let { v -> s.putRating(RatingEntity(k, d.str("kind") ?: k.substringBefore(':'), d.str("refId") ?: k.substringAfter(':'), v, at)) }
+                }
             }
         }
         (o["now"] as? JsonPrimitive)?.longOrNull?.let { prefs.edit().putLong("pull", it).apply() }

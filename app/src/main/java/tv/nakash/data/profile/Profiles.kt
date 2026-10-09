@@ -34,9 +34,20 @@ data class Profile(val id: String, val name: String, val color: Int, val updated
 @Entity(tableName = "searches")
 data class SearchEntity(@PrimaryKey val query: String, val at: Long)
 
+/** A profile's rating of a title: -1 "לא בשבילי", 1 "אהבתי", 2 "ממש אהבתי!" (key = "movie:<id>" / "series:<id>"). */
+@Entity(tableName = "ratings")
+data class RatingEntity(@PrimaryKey val key: String, val kind: String, val refId: String, val value: Int, val at: Long)
+
 /** A removed item (favourite / progress / search), so the removal reaches the other devices too. */
 @Entity(tableName = "tombstones")
 data class TombstoneEntity(@PrimaryKey val key: String, val kind: String, val at: Long)
+
+/** v2 adds the ratings table; everything already there (history, list, searches) is kept as is. */
+val PROFILE_DB_1_2 = object : androidx.room.migration.Migration(1, 2) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS `ratings` (`key` TEXT NOT NULL, `kind` TEXT NOT NULL, `refId` TEXT NOT NULL, `value` INTEGER NOT NULL, `at` INTEGER NOT NULL, PRIMARY KEY(`key`))")
+    }
+}
 
 @Dao
 interface ProfileSyncDao {
@@ -61,10 +72,19 @@ interface ProfileSyncDao {
     @Upsert suspend fun putFavorite(f: FavoriteEntity)
     @Query("DELETE FROM favorites WHERE `key` = :key AND addedAt <= :at") suspend fun deleteFavoriteOlder(key: String, at: Long)
     @Query("DELETE FROM searches WHERE `query` = :q AND at <= :at") suspend fun deleteSearchOlder(q: String, at: Long)
+
+    // Ratings (like / dislike).
+    @Query("SELECT * FROM ratings WHERE `key` = :key") fun rating(key: String): Flow<RatingEntity?>
+    @Query("SELECT * FROM ratings") suspend fun ratings(): List<RatingEntity>
+    @Upsert suspend fun putRating(r: RatingEntity)
+    @Query("DELETE FROM ratings WHERE `key` = :key") suspend fun removeRating(key: String)
+    @Query("SELECT * FROM ratings WHERE at > :since") suspend fun ratingsSince(since: Long): List<RatingEntity>
+    @Query("SELECT at FROM ratings WHERE `key` = :key") suspend fun ratingTime(key: String): Long?
+    @Query("DELETE FROM ratings WHERE `key` = :key AND at <= :at") suspend fun deleteRatingOlder(key: String, at: Long)
 }
 
 /** One database per profile: its watch progress, favourites, searches and removals. */
-@Database(entities = [WatchProgressEntity::class, FavoriteEntity::class, SearchEntity::class, TombstoneEntity::class], version = 1, exportSchema = false)
+@Database(entities = [WatchProgressEntity::class, FavoriteEntity::class, SearchEntity::class, TombstoneEntity::class, RatingEntity::class], version = 2, exportSchema = false)
 abstract class ProfileDb : RoomDatabase() {
     abstract fun user(): UserDao
     abstract fun sync(): ProfileSyncDao
@@ -114,7 +134,7 @@ class ProfileStore @Inject constructor(@ApplicationContext private val ctx: Cont
 
     /** The database of a profile (opened once). */
     fun db(id: String): ProfileDb = synchronized(dbs) {
-        dbs.getOrPut(id) { Room.databaseBuilder(ctx, ProfileDb::class.java, "profile_$id.db").fallbackToDestructiveMigration().build() }
+        dbs.getOrPut(id) { Room.databaseBuilder(ctx, ProfileDb::class.java, "profile_$id.db").addMigrations(PROFILE_DB_1_2).fallbackToDestructiveMigration().build() }
     }
 
     fun clearAll() { prefs.edit().clear().apply(); _current.value = null; _all.value = emptyList(); synchronized(dbs) { dbs.values.forEach { it.close() }; dbs.clear() }
