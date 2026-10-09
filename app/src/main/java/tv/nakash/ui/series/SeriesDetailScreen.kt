@@ -130,7 +130,6 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
     val trailerAlpha by animateFloatAsState(if(trailerPlaying) 1f else 0f,tween(500),label="trailer")
     val trailerKey=tmdb?.trailerKey?.takeUnless {trailerFailed}
 
-    tv.nakash.ui.components.PlaybackFrameCache(videoView,vm.player,vm.thumbs,active && panel==null && started)
     val menuAlpha by animateFloatAsState(if(menuVisible || panel!=null) 1f else 0f,tween(if(menuVisible) 180 else 850),label="series menu")
     val videoAlpha by animateFloatAsState(if(frame) 1f else 0f,tween(700),label="series preview")
 

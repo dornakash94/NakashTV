@@ -229,7 +229,18 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
     var scrubPauseUntil by remember { mutableLongStateOf(0L) }
     var showPrograms by remember { mutableStateOf(false) }
     var programsIndex by remember { mutableIntStateOf(0) }
-    tv.nakash.ui.components.PlaybackFrameCache(videoView,vm.controller,vm.thumbs,enabled=scrubMs==null)
+    tv.nakash.ui.components.PlaybackFrameCache(videoView,vm.controller,vm.thumbs,scrubbing=scrubMs!=null)
+    // "התאמת קצב רענון": while a movie / episode plays, the TV runs at a refresh that shows its frame rate evenly;
+    // leaving the player gives the TV its own mode back. Live channels are left alone (zapping would blank the screen).
+    val activity=androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+    val videoFps by vm.controller.videoFrameRate.collectAsState()
+    val isVod=st.request is PlayRequest.Movie || st.request is PlayRequest.Episode
+    LaunchedEffect(controls.matchFrameRate,videoFps,isVod) {
+        val window=activity?.window ?: return@LaunchedEffect
+        val mode=if(controls.matchFrameRate && isVod) tv.nakash.player.FrameRateMatcher.bestModeId(activity,videoFps) else 0
+        if(window.attributes.preferredDisplayModeId!=mode) window.attributes=window.attributes.apply {preferredDisplayModeId=mode}
+    }
+    DisposableEffect(Unit) {onDispose {activity?.window?.let {w -> if(w.attributes.preferredDisplayModeId!=0) w.attributes=w.attributes.apply {preferredDisplayModeId=0}}}}
     var lastKey by remember { mutableStateOf(enteredAt) }
     val focus = remember { FocusRequester() }
     val req = st.request
@@ -298,8 +309,8 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
     LaunchedEffect(thumbKey,(scrubMs ?: position)/10_000,st.durationMs,st.isBuffering) {
         val uri=vm.controller.player.currentMediaItem?.localConfiguration?.uri?.toString()
         // Only while the user scrubs: extracting frames opens a second connection to the same file and a second
-        // decoder, which slowed the start and caused a rebuffer right after it. Normal playback fills the strip
-        // from the picture on screen (PlaybackFrameCache) at no cost.
+        // decoder. Nothing is made during normal playback; PlaybackFrameCache adds the frame on screen when a scrub
+        // starts or playback is paused.
         if(uri!=null && !st.isBuffering && scrubMs!=null) vm.thumbs.request(thumbKey,uri,scrubMs!!/1000,st.durationMs/1000)
     }
     LaunchedEffect(ended) {

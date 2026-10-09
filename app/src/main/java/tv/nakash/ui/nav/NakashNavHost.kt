@@ -98,6 +98,7 @@ val NavBarHeight: Dp = 48.dp
 
 @Composable
 fun NakashNavHost(nav: NavHostController = rememberNavController()) {
+    LaunchedEffect(Unit) { if (tv.nakash.BuildConfig.DEBUG) DebugRoute.pending?.let { DebugRoute.pending = null; kotlinx.coroutines.delay(800); runCatching { nav.navigate(it) } } }
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route ?: "home"
     val fullscreen = route.startsWith("player")
@@ -200,6 +201,9 @@ fun NakashNavHost(nav: NavHostController = rememberNavController()) {
  * settings on the trailing side. The current section is white and semibold, the rest muted; the focused tab is
  * a solid white pill with black text. The bar always sits on a soft top-down fade so it reads on any image.
  */
+/** Debug builds only: a screen to open on start (from the launch intent), for testing on the emulator. */
+object DebugRoute { @Volatile var pending: String? = null }
+
 @Composable
 fun TopNav(current: String, activeFocus: FocusRequester, floating: Boolean, onFocusChanged: (Boolean) -> Unit, onDown: () -> Boolean, onSelect: (Dest) -> Unit,
            profile: tv.nakash.data.profile.Profile? = null, onProfile: () -> Unit = {}, menuOpen: Boolean = false, onMenuDismiss: () -> Unit = {},

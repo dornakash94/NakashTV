@@ -121,6 +121,7 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
                 2 -> {
                     SettingRow("גודל דילוג","${controls.seekSeconds} שניות") {editingSeek=true}
                     SettingRow("OK בשידור חי", if(controls.liveOkPauses) "ניגון / השהיה" else "לוח שידורים מקוצר") {vm.controls.setLiveOk(!controls.liveOkPauses)}
+                    SettingRow("התאמת קצב רענון", if(controls.matchFrameRate) "פעיל · ייתכן מסך שחור לשנייה בתחילת צפייה" else "כבוי") {vm.controls.setMatchFrameRate(!controls.matchFrameRate)}
                     SettingRow("יחס תמונה", when(controls.aspectMode) {4->"מילוי · עם חיתוך";3->"מתיחה למסך";else->"מקורי · ללא חיתוך"}) {vm.controls.setAspect(when(controls.aspectMode) {0->4;4->3;else->0})}
                     Text("בנגן: שמאל אחורה, ימין קדימה, OK להשהיה. בשידור חי: מעלה/מטה להחלפת ערוץ, ימין למועדפים.",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(start=16.dp,top=14.dp))
                 }

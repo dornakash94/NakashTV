@@ -73,6 +73,8 @@ class PlayerController @Inject constructor(
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state
     val zapChannels = MutableStateFlow<List<ChannelEntity>>(emptyList())
+    /** The playing video's frame rate as the stream declares it (0 = unknown), for matching the TV's refresh rate. */
+    val videoFrameRate = MutableStateFlow(0f)
 
     val player: ExoPlayer by lazy { build() }
     private var playJob: Job? = null
@@ -138,8 +140,19 @@ class PlayerController @Inject constructor(
                         profileSync.hold(isPlaying)
                         if(tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashPlayback","playing=$isPlaying")
                     }
+                    override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                        videoFrameRate.value = p.videoFormat?.frameRate?.takeIf { it > 1f } ?: 0f
+                    }
                     override fun onRenderedFirstFrame() {
-                        if(tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashPlayback","first_frame=${p.videoSize.width}x${p.videoSize.height}")
+                        if(tv.nakash.BuildConfig.DEBUG) {
+                            val f = p.videoFormat
+                            val a = p.audioFormat
+                            android.util.Log.i("NakashPlayback","first_frame=${p.videoSize.width}x${p.videoSize.height} declared_fps=${f?.frameRate} mime=${f?.sampleMimeType} audio=${a?.sampleMimeType} ch=${a?.channelCount} rate=${a?.sampleRate} container=${f?.containerMimeType}")
+                            // The real frame rate: frames the decoder rendered over 10 s of playback.
+                            scope.launch { val c=p.videoDecoderCounters; c?.ensureUpdated(); val r0=c?.renderedOutputBufferCount ?: 0; val t0=System.nanoTime()
+                                delay(10_000); c?.ensureUpdated(); val r1=c?.renderedOutputBufferCount ?: 0
+                                android.util.Log.i("NakashPlayback","measured_fps=%.3f over %.1fs playing=${p.isPlaying}".format((r1-r0)/((System.nanoTime()-t0)/1e9),(System.nanoTime()-t0)/1e9)) }
+                        }
                     }
                     override fun onPlaybackStateChanged(s: Int) {
                         _state.update { it.copy(isBuffering = s == Player.STATE_BUFFERING, durationMs = p.duration.takeIf { d -> d != C.TIME_UNSET } ?: 0) }
@@ -155,6 +168,7 @@ class PlayerController @Inject constructor(
     fun play(req: PlayRequest) {
         _ended.value=0L
         // One video at a time: the card preview and the trailer web renderer give their decoders and memory back.
+        videoFrameRate.value = 0f
         preview.stop(); tv.nakash.ui.components.TrailerPlayer.release(); saveNow(); stopProgress(); stallJob?.cancel(); playJob?.cancel(); m3u8Failures = 0
         playJob = scope.launch {
             when (req) {

@@ -38,6 +38,8 @@ data class PlaybackPreferencesState(
     val liveOkPauses: Boolean = false,
     val bindings: List<RemoteBinding> = emptyList(),
     val aspectMode: Int = 0,
+    /** Switch the TV to the video's frame rate during movies/episodes (off by default: some TVs blank for a second). */
+    val matchFrameRate: Boolean = false,
 ) {
     val actions: Map<Int, RemoteAction> get() = bindings.associate { it.keyCode to it.action }
     fun action(key: Int): RemoteAction = actions[key] ?: RemoteAction.NONE
@@ -65,11 +67,13 @@ class PlaybackPreferences @Inject constructor(@ApplicationContext context: Conte
             prefs.getBoolean("live_ok_pauses", false),
             bindings,
             prefs.getInt("aspect_mode", 0).takeIf { it in listOf(0, 3, 4) } ?: 0,
+            prefs.getBoolean("match_frame_rate", false),
         )
     }
 
     fun setSeek(seconds: Int) { require(seconds in SEEK_OPTIONS); prefs.edit().putInt("seek_seconds", seconds).apply(); state.value = read() }
     fun setLiveOk(pauses: Boolean) { prefs.edit().putBoolean("live_ok_pauses", pauses).apply(); state.value = read() }
+    fun setMatchFrameRate(on: Boolean) { prefs.edit().putBoolean("match_frame_rate", on).apply(); state.value = read() }
     fun setAspect(mode: Int) { require(mode in listOf(0, 3, 4)); prefs.edit().putInt("aspect_mode", mode).apply(); state.value = read() }
 
     /** Bind (or rebind) a physical key. Returns false for keys that must stay reserved for navigation. */

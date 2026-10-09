@@ -53,6 +53,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Debug builds only: `am start ... --es route seriesDetail/123` opens that screen after the profile is chosen.
+        if (BuildConfig.DEBUG) intent?.getStringExtra("route")?.let { tv.nakash.ui.nav.DebugRoute.pending = it }
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
             hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
