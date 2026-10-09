@@ -107,6 +107,7 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
     val heroFocus=remember {FocusRequester()}
     var plotCut by remember {mutableStateOf(false)}
     var plotOpen by remember {mutableStateOf(false)}
+    var upAt by remember {mutableStateOf(0L)}
     val panelFocus=remember {FocusRequester()}
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     var active by remember {mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))}
@@ -251,7 +252,8 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
         // Two fixed regions: the menu at the bottom, sized for every button it can have (so it is always fully on
         // screen and Play keeps its place when "טריילר"/"כותרים דומים" arrive), and the text above it, fitted to the
         // space that is left: a long title or plot gets a smaller size / fewer lines instead of pushing the menu away.
-        if(panel==null) Column(Modifier.align(Alignment.TopStart).fillMaxHeight().fillMaxWidth(.52f).padding(start=56.dp,end=8.dp,top=56.dp,bottom=28.dp)) {
+        if(panel==null) Column(Modifier.align(Alignment.TopStart).fillMaxHeight().fillMaxWidth(.52f).padding(start=56.dp,end=8.dp,top=56.dp,bottom=28.dp)
+            .onPreviewKeyEvent {e -> if(e.type==androidx.compose.ui.input.key.KeyEventType.KeyDown && e.key==androidx.compose.ui.input.key.Key.DirectionUp) upAt=System.currentTimeMillis(); false}) {
             // The text from the top (Netflix TV), the menu right under it; the text takes only the height it needs.
             BoxWithConstraints(Modifier.weight(1f,fill=false).fillMaxWidth()) {
                 val avail=maxHeight
@@ -272,7 +274,10 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                     Text(meta,color=Color.White.copy(alpha=.85f),style=MaterialTheme.typography.titleLarge.copy(fontSize=17.sp),maxLines=1,overflow=TextOverflow.Ellipsis)
                     // As much of the plot as fits above the menu. When it is cut, ▲ from the menu lands on it and opens the
                     // whole of it (with the cast and director) over the picture.
-                    Surface(onClick={plotOpen=true},enabled=plotCut,modifier=Modifier.weight(1f,fill=false).onFocusChanged {if(it.isFocused) plotOpen=true},
+                    Surface(onClick={plotOpen=true},enabled=plotCut,modifier=Modifier.weight(1f,fill=false).onFocusChanged {if(it.isFocused) {
+                        // Only a real ▲ opens the whole plot; focus that lands here any other way goes back to Play.
+                        if(System.currentTimeMillis()-upAt<600) plotOpen=true else runCatching {heroFocus.requestFocus()}
+                    }},
                         shape=ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),scale=ClickableSurfaceDefaults.scale(focusedScale=1f),
                         colors=ClickableSurfaceDefaults.colors(containerColor=Color.Transparent,contentColor=Color.White,focusedContainerColor=Color.White.copy(alpha=.12f),focusedContentColor=Color.White,
                             disabledContainerColor=Color.Transparent,disabledContentColor=Color.White)) {
@@ -314,7 +319,8 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                 DetailMenuItem(if(favorite) androidx.compose.material.icons.Icons.Filled.Check else androidx.compose.material.icons.Icons.Filled.Add,if(favorite) "ברשימה שלי" else "הוסף לרשימה שלי",{scope.launch {vm.user.toggleFavorite(if(series) "series" else "movie",id.toString())}})
                 // Only while there is something to continue here; the title then leaves "המשך צפייה" (finished episodes keep ✓).
                 val inContinue=if(series) progress.any {!it.completed && it.positionMs>0} else resume?.let {!it.completed && it.positionMs>0} == true
-                if(inContinue) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.RemoveCircleOutline,"הסרה מהמשך צפייה",{scope.launch {
+                // Focus goes to Play first: when this row disappears, focus would otherwise fall onto the plot and open it.
+                if(inContinue) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.RemoveCircleOutline,"הסרה מהמשך צפייה",{runCatching {heroFocus.requestFocus()};scope.launch {
                     vm.user.removeFromContinue(if(series) "episode" else "movie",id.toString(),if(series) id else null)
                     resume=if(series) vm.user.latestForSeries(id) else null
                 }})
