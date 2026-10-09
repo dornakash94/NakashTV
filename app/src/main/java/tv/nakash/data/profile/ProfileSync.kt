@@ -60,15 +60,35 @@ class ProfileSync @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true }
     val enabled get() = base.isNotBlank()
 
-    /** True while a video plays: no sync then (on weak TV boxes its work showed as a small stutter every 30 s). */
+    /** True while a video plays: the sync then runs once a minute instead of every 30 s. */
     @Volatile private var holding = false
+    @Volatile private var lastSyncAt = 0L
 
     fun start() {
         if (!enabled || loop?.isActive == true) return
-        loop = scope.launch { while (isActive) { if (!holding) runCatching { syncNow() }; delay(30_000) } }
+        loop = scope.launch {
+            while (isActive) {
+                // While playing, still once a minute: a TV switched off mid-episode must not keep its last minutes to
+                // itself (it is frozen at once, before any "on stop" sync can run).
+                if (!holding || System.currentTimeMillis() - lastSyncAt >= 60_000) runCatching { syncNow() }
+                delay(30_000)
+            }
+        }
     }
 
-    /** Called by the player: hold the sync while playing, and catch up as soon as playback stops or pauses. */
+    /**
+     * The app is leaving the screen (Home, another input, the TV switched off): sync now, and also hand Android a job
+     * that syncs once the network is there, which runs even if the app is frozen before this finishes.
+     */
+    fun syncOnLeave(ctx: Context) {
+        if (!enabled) return
+        scope.launch { runCatching { syncNow() } }
+        val req = androidx.work.OneTimeWorkRequestBuilder<ProfileSyncWorker>()
+            .setConstraints(androidx.work.Constraints.Builder().setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build()).build()
+        androidx.work.WorkManager.getInstance(ctx).enqueueUniqueWork("profile-sync", androidx.work.ExistingWorkPolicy.REPLACE, req)
+    }
+
+    /** Called by the player: sync less while playing, and catch up as soon as playback stops or pauses. */
     fun hold(playing: Boolean) {
         if (holding == playing) return
         holding = playing
@@ -79,7 +99,7 @@ class ProfileSync @Inject constructor(
     suspend fun syncNow(): Boolean = withContext(Dispatchers.IO) {
         if (!enabled) return@withContext false
         val key = accountKey() ?: return@withContext false
-        lock.withLock { push(key) && pull(key) }
+        lock.withLock { (push(key) && pull(key)).also { if (it) lastSyncAt = System.currentTimeMillis(); if (tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashSync", "sync ok=$it holding=$holding") } }
     }
 
     private fun accountKey(): String? {

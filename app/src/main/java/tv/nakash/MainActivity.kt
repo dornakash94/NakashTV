@@ -16,6 +16,7 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
     @Inject lateinit var accountStore: AccountStore
     @Inject lateinit var profiles: tv.nakash.data.profile.ProfileStore
+    @Inject lateinit var profileSync: tv.nakash.data.profile.ProfileSync
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         // Settings is learning a remote button: it gets every key first, before focus, dialogs or the media session.
         tv.nakash.data.local.KeyCapture.onKey?.let { listener ->
@@ -38,6 +39,7 @@ class MainActivity : ComponentActivity() {
     /** Leaving the app (home button, another input): free the trailer renderer and decoded images. */
     override fun onStop() {
         super.onStop()
+        profileSync.syncOnLeave(this)
         tv.nakash.ui.components.TrailerPlayer.release()
         coil3.SingletonImageLoader.get(this).memoryCache?.clear()
     }
