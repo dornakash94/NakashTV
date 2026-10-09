@@ -122,6 +122,8 @@ class HomeViewModel @Inject constructor(
     val hero: StateFlow<HeroItem?> = _hero
 
     private var focusJob: kotlinx.coroutines.Job? = null
+    fun removeFromContinue(p: WatchProgressEntity) = viewModelScope.launch { user.removeFromContinue(p.kind, p.refId, p.seriesId) }
+
     fun onFocus(item: Any) {
         focusJob?.cancel()
         focusJob = viewModelScope.launch {

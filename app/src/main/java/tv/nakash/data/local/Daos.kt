@@ -92,6 +92,7 @@ interface UserDao {
     @Query("SELECT * FROM watch_progress WHERE `key` = :key") suspend fun progress(key: String): WatchProgressEntity?
     @Query("SELECT * FROM watch_progress WHERE seriesId = :seriesId ORDER BY updatedAt DESC LIMIT 1") suspend fun latestForSeries(seriesId: Int): WatchProgressEntity?
     @Query("SELECT * FROM watch_progress WHERE seriesId = :seriesId") fun progressForSeries(seriesId: Int): Flow<List<WatchProgressEntity>>
+    @Query("SELECT * FROM watch_progress WHERE seriesId = :seriesId") suspend fun progressForSeriesOnce(seriesId: Int): List<WatchProgressEntity>
     @Upsert suspend fun upsert(p: WatchProgressEntity)
     @Query("DELETE FROM watch_progress WHERE `key` = :key") suspend fun remove(key: String)
     @Query("SELECT * FROM favorites ORDER BY addedAt") fun favorites(): Flow<List<FavoriteEntity>>

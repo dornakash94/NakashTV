@@ -88,6 +88,11 @@ class UserRepository @Inject constructor(
     }
     suspend fun markWatched(kind: String, refId: String, seriesId: Int?, durationMs: Long) =
         dao.upsert(WatchProgressEntity("$kind:$refId", kind, refId, seriesId, durationMs, durationMs, System.currentTimeMillis(), completed = true))
+    /** "הסרה מהמשך צפייה": the title leaves the row. A series drops its unfinished episodes; finished ones keep their ✓. */
+    suspend fun removeFromContinue(kind: String, refId: String, seriesId: Int?) {
+        if (kind == "episode" && seriesId != null) dao.progressForSeriesOnce(seriesId).filter { !it.completed }.forEach { remove("episode", it.refId) }
+        else remove(kind, refId)
+    }
     suspend fun remove(kind: String, refId: String) {
         val key = "$kind:$refId"
         if (dao.progress(key) != null) { dao.remove(key); sync.tombstone(TombstoneEntity(key, "progress", System.currentTimeMillis())) }

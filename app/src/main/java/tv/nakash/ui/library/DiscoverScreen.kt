@@ -64,6 +64,7 @@ import coil3.request.allowHardware
 import coil3.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tv.nakash.ui.components.PosterCard
@@ -103,6 +104,10 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     val favorites by vm.favorites.collectAsState()
     val tmdbKey by vm.tmdbPrefs.key.collectAsState()
     val smartAll by vm.smart.collectAsState()
+    // Long press on a "המשך צפייה" card: remove it from the row (after a confirmation).
+    var removing by remember { mutableStateOf<ShelfTitle?>(null) }
+    removing?.let { r -> tv.nakash.ui.components.RemoveFromContinueDialog(r.title, {
+        vm.removeFromContinue(if (seriesMode) "episode" else "movie", r.id.toString(), if (seriesMode) r.id else null); removing = null }) { removing = null } }
     val smart = smartAll[seriesMode].orEmpty()
     LaunchedEffect(seriesMode) { vm.loadSmart(seriesMode) }
     var selectedCategory by rememberSaveable(kind) { mutableStateOf<String?>(null) }
@@ -185,18 +190,26 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     // ---- trailers: TMDB key → YouTube key, cached per title ----
     // One TMDB lookup per title gives its trailer and a sharp wide image (the provider's are small, and its movie
     // list has no wide image at all).
-    val extras = remember(kind) { mutableStateMapOf<Int, tv.nakash.domain.TmdbDetails?>() }
+    // Kept OUT of Compose state: a state map made the whole screen and every card recompose on each of the 20-30
+    // results landing while a row slides (jank on weak boxes). Each card reads only its own wide image, and one
+    // title is never looked up twice at once.
+    val extras = remember(kind) { HashMap<Int, kotlinx.coroutines.Deferred<tv.nakash.domain.TmdbDetails?>>() }
+    val wides = remember(kind) { HashMap<Int, androidx.compose.runtime.MutableState<String?>>() }
+    fun wideState(id: Int) = wides.getOrPut(id) { mutableStateOf(null) }
+    val extrasScope = rememberCoroutineScope()
     suspend fun extrasFor(t: ShelfTitle): tv.nakash.domain.TmdbDetails? {
         if (tmdbKey == null) return null
-        if (extras.containsKey(t.id)) return extras[t.id]
-        val d = runCatching { if (seriesMode) vm.tmdb.tv(t.title, t.year) else vm.tmdb.movie(t.tmdbId, t.title, t.year) }.getOrNull()
-        extras[t.id] = d
-        return d
+        return extras.getOrPut(t.id) {
+            extrasScope.async {
+                runCatching { if (seriesMode) vm.tmdb.tv(t.title, t.year) else vm.tmdb.movie(t.tmdbId, t.title, t.year) }.getOrNull()
+                    .also { d -> d?.backdrop?.let { wideState(t.id).value = it } }
+            }
+        }.await()
     }
     suspend fun trailerFor(t: ShelfTitle): String? = extrasFor(t)?.trailerKey
-    fun wideOf(t: ShelfTitle): String? = extras[t.id]?.backdrop ?: t.backdrop
+    fun wideOf(t: ShelfTitle): String? = (wideState(t.id).value ?: t.backdrop)?.let { tv.nakash.ui.components.cardSized(it) }
     // 1280 px is sharp on a 1080p TV; the "original" file is often 4K and several MB (slow to fetch and decode).
-    fun bigOf(t: ShelfTitle): String? = extras[t.id]?.backdrop ?: t.backdrop ?: t.image
+    fun bigOf(t: ShelfTitle): String? = wideState(t.id).value ?: t.backdrop ?: t.image
     LaunchedEffect(billboard?.id, tmdbKey) { billboard?.let { extrasFor(it) } }
     val billboardImage = billboard?.let { bigOf(it) }
     val billboardColor by produceState(Color(0xFF1B1D22), billboardImage) { value = tv.nakash.ui.components.dominantColor(ctx, billboardImage) ?: value }
@@ -214,7 +227,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
         wantKey = null
         if (selectedCategory != null) return@LaunchedEffect
         if (billboardFocused) { val b = billboard ?: return@LaunchedEffect; delay(3_000); trailerFor(b)?.let { billboardBounds = liveBounds[0]; wantKey = it to true } }
-        else { val t = titles.firstOrNull { it.id == focusedId } ?: return@LaunchedEffect; delay(350); trailerFor(t)?.let { cardBounds = liveBounds[1]; wantKey = it to false } }
+        else { val t = titles.firstOrNull { it.id == focusedId } ?: return@LaunchedEffect; delay(1_200); trailerFor(t)?.let { cardBounds = liveBounds[1]; wantKey = it to false } }
     }
     target = wantKey?.let { (k, onBillboard) -> (if (onBillboard) billboardBounds else cardBounds)?.let { TrailerTarget(k, it.translate(-stageOrigin), if (onBillboard) 22f else 10f) } }
     val billboardPlaying = target != null && wantKey?.second == true && playingKey == target?.key
@@ -231,10 +244,14 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     // right after the short dwell instead of waiting for TMDB.
     LaunchedEffect(focusedShelf, shelves, tmdbKey) {
         val i = shelves.indexOfFirst { it.key == focusedShelf }
-        (listOfNotNull(billboard) + (shelves.getOrNull(i)?.items.orEmpty()) + (shelves.getOrNull(i + 1)?.items.orEmpty().take(6))).forEach { trailerFor(it) }
+        (listOfNotNull(billboard) + (shelves.getOrNull(i)?.items.orEmpty().take(10)) + (shelves.getOrNull(i + 1)?.items.orEmpty().take(3))).forEach { trailerFor(it) }
     }
-    LaunchedEffect(focusedShelf, shelves) {
-        shelves.firstOrNull { it.key == focusedShelf }?.items?.forEach { prefetch(ctx, wideOf(it)) }
+    // Only the next few cards (each prefetch is a full decode on a weak CPU; a whole row of them stuttered the slide).
+    LaunchedEffect(focusedId, focusedShelf) {
+        val items = shelves.firstOrNull { it.key == focusedShelf }?.items ?: return@LaunchedEffect
+        val at = items.indexOfFirst { it.id == focusedId }.coerceAtLeast(0)
+        delay(400)
+        items.drop(at).take(3).forEach { prefetch(ctx, wideOf(it)) }
     }
     val manualScroll = remember { object : BringIntoViewSpec { override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float) = 0f } }
     val playFocus = remember { FocusRequester() }
@@ -333,7 +350,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                                         ExpandingCard(remember(item, wide) { if (wide == item.backdrop) item else item.copy(backdrop = wide) }, expanded, playingHere = expanded && cardPlaying,
                                             onBounds = { if (expanded) { liveBounds[1] = it; if (wantKey?.second == false) cardBounds = it } },
                                             onFocus = { billboardFocused = false; focusedShelf = shelf.key; focusedId = item.id },
-                                            click = { open(item) })
+                                            click = { open(item) }, longClick = if (shelf.key == "continue") ({ removing = item }) else null)
                                         }
                                     }
                                     item(key = "all") {
@@ -416,7 +433,7 @@ private fun BillboardButton(label: String, icon: androidx.compose.ui.graphics.ve
  * fades in over the stretching poster; when the trailer plays here both fade out and the video behind shows through.
  */
 @Composable
-private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, playingHere: Boolean, onBounds: (Rect) -> Unit, onFocus: () -> Unit, click: () -> Unit) {
+private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, playingHere: Boolean, onBounds: (Rect) -> Unit, onFocus: () -> Unit, click: () -> Unit, longClick: (() -> Unit)? = null) {
     val width by animateDpAsState(if (expanded) WideW else PosterW, tween(CardMs, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "cardW")
     // The provider sometimes gives the poster (or a portrait image) as "backdrop": only a real landscape image is used wide.
     var wideOk by remember(item.backdrop) { mutableStateOf(false) }
@@ -425,7 +442,8 @@ private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, playingHere: Bool
     val fillAlpha by animateFloatAsState(if (expanded && !(hasWide && wideOk)) 1f else 0f, tween(260), label = "fill")
     val imageAlpha by animateFloatAsState(if (playingHere) 0f else 1f, tween(450), label = "cardImage")
     val shape = RoundedCornerShape(10.dp)
-    Surface(onClick = click, modifier = Modifier.width(width).height(CardH).onFocusChanged { if (it.isFocused) onFocus() }.onGloballyPositioned { onBounds(it.boundsInRoot()) },
+    Surface(onClick = click, onLongClick = longClick, modifier = Modifier.width(width).height(CardH).onFocusChanged { if (it.isFocused) onFocus() }
+            .then(if (expanded) Modifier.onGloballyPositioned { onBounds(it.boundsInRoot()) } else Modifier),
         shape = ClickableSurfaceDefaults.shape(shape), scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = Color.Transparent),
         border = ClickableSurfaceDefaults.border(focusedBorder = androidx.tv.material3.Border(BorderStroke(3.dp, Color.White), shape = shape))) {

@@ -49,6 +49,7 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
 import tv.nakash.data.local.ChannelEntity
 import tv.nakash.ui.theme.NakashColors
 
@@ -96,11 +97,18 @@ fun NetflixRowsPage(
     val list = rememberLazyListState()
     val rowState = rememberSaveableStateHolder()
     // trailers
-    val extras = remember(restoreKey) { mutableStateMapOf<String, tv.nakash.domain.TmdbDetails?>() }
+    // TMDB extras per card, kept OUT of Compose state: a state map made every card and the page recompose on each
+    // of the 20-30 results that land while a row slides (jank on weak boxes). Each card instead reads only its own
+    // wide image ([wideOf]), and one title is never looked up twice at once.
+    val extras = remember(restoreKey) { HashMap<String, kotlinx.coroutines.Deferred<tv.nakash.domain.TmdbDetails?>>() }
+    val wides = remember(restoreKey) { HashMap<String, androidx.compose.runtime.MutableState<String?>>() }
+    fun wideOf(key: String) = wides.getOrPut(key) { mutableStateOf(null) }
+    val extrasScope = rememberCoroutineScope()
     suspend fun extrasOf(c: RowCard): tv.nakash.domain.TmdbDetails? {
         val lookup = c.extras ?: return null
-        if (extras.containsKey(c.key)) return extras[c.key]
-        return runCatching { lookup() }.getOrNull().also { extras[c.key] = it }
+        return extras.getOrPut(c.key) {
+            extrasScope.async { runCatching { lookup() }.getOrNull().also { d -> d?.backdrop?.let { wideOf(c.key).value = it } } }
+        }.await()
     }
     suspend fun trailerOf(c: RowCard): String? = extrasOf(c)?.trailerKey
     var stageOrigin by remember { mutableStateOf(Offset.Zero) }
@@ -115,21 +123,22 @@ fun NetflixRowsPage(
         want = null
         val c = focused ?: return@LaunchedEffect
         if (c.kind != CardKind.POSTER) return@LaunchedEffect
-        delay(350)
+        // A real pause on the card, not a pass through it: a trailer loading while you browse stutters weak boxes.
+        delay(1_200)
         val k = trailerOf(c) ?: return@LaunchedEffect
         cardBounds = liveBounds[0]; want = k
     }
     LaunchedEffect(focusedShelf, shelves) {
         val i = shelves.indexOfFirst { it.key == focusedShelf }
-        (shelves.getOrNull(i)?.cards.orEmpty() + shelves.getOrNull(i + 1)?.cards.orEmpty().take(6)).filter { it.kind == CardKind.POSTER }.forEach { trailerOf(it) }
+        (shelves.getOrNull(i)?.cards.orEmpty().take(10) + shelves.getOrNull(i + 1)?.cards.orEmpty().take(3)).filter { it.kind == CardKind.POSTER }.forEach { trailerOf(it) }
     }
     val target = want?.let { k -> cardBounds?.let { TrailerTarget(k, it.translate(-stageOrigin), 10f) } }
     LaunchedEffect(focusedShelf) { val i = shelves.indexOfFirst { it.key == focusedShelf }; if (i >= 0) list.animateScrollToItem(i) }
 
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val tintSource = focused?.let { extras[it.key]?.backdrop ?: it.wide ?: it.poster ?: it.channel?.logo }
+    val tintSource = focused?.let { wideOf(it.key).value ?: it.wide ?: it.poster ?: it.channel?.logo }
     var tint by remember(restoreKey) { mutableStateOf(Color(0xFF1B1D22)) }
-    LaunchedEffect(tintSource) { delay(250); dominantColor(ctx, tintSource)?.let { tint = it } }
+    LaunchedEffect(tintSource) { delay(650); dominantColor(ctx, tintSource)?.let { tint = it } }
     val scrolled = rememberScrolledPx(list)
     Box(modifier.fillMaxSize()) {
         ScrollTintBackground(tint, { scrolled.value })
@@ -172,13 +181,13 @@ fun NetflixRowsPage(
                             // has it disabled. Our anchoring scroll then only adds what is still missing.
                             CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides noAutoScroll) {
                             LazyRow(modifier = Modifier.focusProperties { enter = { rowFirst.ifAttached() } }, state = rowList, contentPadding = PaddingValues(horizontal = 40.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                itemsIndexed(shelf.cards, key = { _, c -> c.key }) { i, c ->
+                                itemsIndexed(shelf.cards, key = { _, c -> c.key }, contentType = { _, c -> c.kind }) { i, c ->
                                     val isFocused = rowFocused && focusedCard == c.key
                                     Box((if (i == 0) Modifier.focusRequester(rowFirst) else Modifier).then(if (entry?.first == shelf.key && entry.second == c.key) Modifier.focusRequester(firstFocus) else Modifier)) {
                                         // Same objects from one pass to the next, so cards whose inputs did not change skip recomposition.
                                         val onF = remember(shelf.key, c) { { focusedShelf = shelf.key; focusedCard = c.key; c.onFocus() } }
                                         val onB = remember(isFocused) { { r: Rect -> if (isFocused) { liveBounds[0] = r; if (want != null) cardBounds = r } } }
-                                        val wide = extras[c.key]?.backdrop ?: c.wide
+                                        val wide = (wideOf(c.key).value ?: c.wide)?.let(::cardSized)
                                         val card = remember(c, wide) { if (wide == c.wide) c else c.copy(wide = wide) }
                                         PosterExpandingCard(card, isFocused, isFocused && playing != null && playing == target?.key,
                                             onB, onF, previewPlayer, isFocused && previewHasFrame)
@@ -233,7 +242,9 @@ private fun PosterExpandingCard(c: RowCard, expanded: Boolean, playingHere: Bool
     val imageAlpha by animateFloatAsState(if (playingHere) 0f else 1f, tween(450), label = "img")
     val liveAlpha by animateFloatAsState(if (expanded && liveFrame) 1f else 0f, tween(400), label = "live")
     val shape = RoundedCornerShape(10.dp)
-    Surface(onClick = c.onClick, onLongClick = c.onLongClick, modifier = Modifier.width(width).height(PosterH).onFocusChanged { if (it.isFocused) onFocus() }.onGloballyPositioned { onBounds(it.boundsInRoot()) },
+    Surface(onClick = c.onClick, onLongClick = c.onLongClick, modifier = Modifier.width(width).height(PosterH).onFocusChanged { if (it.isFocused) onFocus() }
+            // Only the focused card's position is used (for its trailer); the others don't report it every frame.
+            .then(if (expanded) Modifier.onGloballyPositioned { onBounds(it.boundsInRoot()) } else Modifier),
         shape = ClickableSurfaceDefaults.shape(shape), scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = Color.Transparent),
         border = ClickableSurfaceDefaults.border(focusedBorder = androidx.tv.material3.Border(BorderStroke(3.dp, Color.White), shape = shape))) {
@@ -284,3 +295,25 @@ private fun ProgressLine(p: Float, modifier: Modifier) {
  * freeFocus() is a harmless no-op that throws exactly in that case.
  */
 internal fun FocusRequester.ifAttached(): FocusRequester = if (runCatching { freeFocus() }.isSuccess) this else FocusRequester.Default
+
+/** A TMDB image at the size a card shows it (w780 is plenty for a 469 dp card; w1280 stays for full screens). */
+internal fun cardSized(url: String): String = url.replace("/t/p/w1280/", "/t/p/w780/").replace("/t/p/original/", "/t/p/w780/")
+
+/** "להסיר מהמשך צפייה?" — asked on a long press on a continue-watching card. */
+@Composable
+fun RemoveFromContinueDialog(title: String, remove: () -> Unit, dismiss: () -> Unit) {
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(80); runCatching { first.requestFocus() } }
+    androidx.compose.ui.window.Dialog(onDismissRequest = dismiss) {
+        Surface(shape = RoundedCornerShape(20.dp)) {
+            Column(Modifier.padding(28.dp).width(440.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("להסיר מ״המשך צפייה״?", style = MaterialTheme.typography.headlineSmall)
+                Text(title, color = NakashColors.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    tv.nakash.ui.library.Action("הסרה", remove, Modifier.focusRequester(first))
+                    tv.nakash.ui.library.Action("ביטול", dismiss)
+                }
+            }
+        }
+    }
+}

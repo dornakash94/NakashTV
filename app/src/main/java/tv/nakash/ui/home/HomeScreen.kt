@@ -76,7 +76,7 @@ import javax.inject.Inject
 @Composable
 fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), playerVm: PlayerEntry = hiltViewModel()) {
     val rows by vm.rows.collectAsState()
-    val hero by vm.hero.collectAsState()
+    // Read when needed (not collected): it changes on every focus move and recomposed the whole screen each time.
     val nowMap by vm.nowMap.collectAsState()
     val nowSec = System.currentTimeMillis() / 1000
     val rowsFocus=remember { FocusRequester() }
@@ -93,14 +93,14 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
         // The requester sits on the first card, which the lazy list may not have composed yet — retry briefly.
         if(rows.any { it.items.isNotEmpty() }) repeat(8) { kotlinx.coroutines.delay(150); if(runCatching { rowsFocus.requestFocus() }.isSuccess) return@LaunchedEffect }
     }
-    fun activate() { when(val h=hero) {
+    fun activate() { when(val h=vm.hero.value) {
         is HeroItem.Channel -> { playerVm.play(PlayRequest.Live(h.channel));nav.navigate("player") }
         is HeroItem.Movie -> nav.navigate("movie/${h.movie.id}")
         is HeroItem.Series -> nav.navigate("seriesDetail/${h.series.id}")
         else -> {}
     } }
     DisposableEffect(Unit) { onDispose { vm.stopPreview() } }
-    LaunchedEffect(rows) { if(hero == null) rows.firstOrNull { it.items.isNotEmpty() }?.items?.firstOrNull()?.let { vm.onFocus(it) }; vm.warmNow(rows.flatMap { it.items }.filterIsInstance<ChannelEntity>()) }
+    LaunchedEffect(rows) { if(vm.hero.value == null) rows.firstOrNull { it.items.isNotEmpty() }?.items?.firstOrNull()?.let { vm.onFocus(it) }; vm.warmNow(rows.flatMap { it.items }.filterIsInstance<ChannelEntity>()) }
 
     val toast by vm.toast.collectAsState()
     val hasFrame by vm.previewFrame.collectAsState()
@@ -112,6 +112,9 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
     }
     // Built only when the rows or the now-playing data change, not on every focus or preview frame.
     val nowMinute = nowSec / 60
+    // Long press on a continue-watching card: remove it from the row (after a confirmation).
+    var removing by remember { mutableStateOf<ContinueItem?>(null) }
+    removing?.let { r -> tv.nakash.ui.components.RemoveFromContinueDialog(r.title, { vm.removeFromContinue(r.progress); removing = null }) { removing = null } }
     val shelves = remember(rows, nowMap, nowMinute) { rows.filter { it.items.isNotEmpty() }.map { row ->
         tv.nakash.ui.components.RowShelf(row.key, row.title, row.subtitle, row.items.map { item ->
             when (item) {
@@ -133,7 +136,7 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
                     tv.nakash.ui.components.RowCard("w${p.key}", tv.nakash.ui.components.CardKind.WIDE, item.title, wide = item.image,
                         label = if (p.durationMs > 0) "נותרו ${((p.durationMs - p.positionMs).coerceAtLeast(0) / 60000)} דק׳" else null,
                         progress = if (p.durationMs > 0) (p.positionMs.toFloat() / p.durationMs).coerceIn(0f, 1f) else null,
-                        onFocus = { vm.onFocus(item) }, onClick = { openContinue(item) })
+                        onFocus = { vm.onFocus(item) }, onClick = { openContinue(item) }, onLongClick = { removing = item })
                 }
                 else -> tv.nakash.ui.components.RowCard(keyOf(item), tv.nakash.ui.components.CardKind.WIDE, "", onClick = {})
             }
