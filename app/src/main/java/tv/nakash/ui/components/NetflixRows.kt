@@ -298,22 +298,3 @@ internal fun FocusRequester.ifAttached(): FocusRequester = if (runCatching { fre
 
 /** A TMDB image at the size a card shows it (w780 is plenty for a 469 dp card; w1280 stays for full screens). */
 internal fun cardSized(url: String): String = url.replace("/t/p/w1280/", "/t/p/w780/").replace("/t/p/original/", "/t/p/w780/")
-
-/** "להסיר מהמשך צפייה?" — asked on a long press on a continue-watching card. */
-@Composable
-fun RemoveFromContinueDialog(title: String, remove: () -> Unit, dismiss: () -> Unit) {
-    val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { delay(80); runCatching { first.requestFocus() } }
-    androidx.compose.ui.window.Dialog(onDismissRequest = dismiss) {
-        Surface(shape = RoundedCornerShape(20.dp)) {
-            Column(Modifier.padding(28.dp).width(440.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("להסיר מ״המשך צפייה״?", style = MaterialTheme.typography.headlineSmall)
-                Text(title, color = NakashColors.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    tv.nakash.ui.library.Action("הסרה", remove, Modifier.focusRequester(first))
-                    tv.nakash.ui.library.Action("ביטול", dismiss)
-                }
-            }
-        }
-    }
-}

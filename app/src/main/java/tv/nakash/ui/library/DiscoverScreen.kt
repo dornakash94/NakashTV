@@ -104,10 +104,6 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     val favorites by vm.favorites.collectAsState()
     val tmdbKey by vm.tmdbPrefs.key.collectAsState()
     val smartAll by vm.smart.collectAsState()
-    // Long press on a "המשך צפייה" card: remove it from the row (after a confirmation).
-    var removing by remember { mutableStateOf<ShelfTitle?>(null) }
-    removing?.let { r -> tv.nakash.ui.components.RemoveFromContinueDialog(r.title, {
-        vm.removeFromContinue(if (seriesMode) "episode" else "movie", r.id.toString(), if (seriesMode) r.id else null); removing = null }) { removing = null } }
     val smart = smartAll[seriesMode].orEmpty()
     LaunchedEffect(seriesMode) { vm.loadSmart(seriesMode) }
     var selectedCategory by rememberSaveable(kind) { mutableStateOf<String?>(null) }
@@ -350,7 +346,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                                         ExpandingCard(remember(item, wide) { if (wide == item.backdrop) item else item.copy(backdrop = wide) }, expanded, playingHere = expanded && cardPlaying,
                                             onBounds = { if (expanded) { liveBounds[1] = it; if (wantKey?.second == false) cardBounds = it } },
                                             onFocus = { billboardFocused = false; focusedShelf = shelf.key; focusedId = item.id },
-                                            click = { open(item) }, longClick = if (shelf.key == "continue") ({ removing = item }) else null)
+                                            click = { open(item) })
                                         }
                                     }
                                     item(key = "all") {
@@ -433,7 +429,7 @@ private fun BillboardButton(label: String, icon: androidx.compose.ui.graphics.ve
  * fades in over the stretching poster; when the trailer plays here both fade out and the video behind shows through.
  */
 @Composable
-private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, playingHere: Boolean, onBounds: (Rect) -> Unit, onFocus: () -> Unit, click: () -> Unit, longClick: (() -> Unit)? = null) {
+private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, playingHere: Boolean, onBounds: (Rect) -> Unit, onFocus: () -> Unit, click: () -> Unit) {
     val width by animateDpAsState(if (expanded) WideW else PosterW, tween(CardMs, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "cardW")
     // The provider sometimes gives the poster (or a portrait image) as "backdrop": only a real landscape image is used wide.
     var wideOk by remember(item.backdrop) { mutableStateOf(false) }
@@ -442,7 +438,7 @@ private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, playingHere: Bool
     val fillAlpha by animateFloatAsState(if (expanded && !(hasWide && wideOk)) 1f else 0f, tween(260), label = "fill")
     val imageAlpha by animateFloatAsState(if (playingHere) 0f else 1f, tween(450), label = "cardImage")
     val shape = RoundedCornerShape(10.dp)
-    Surface(onClick = click, onLongClick = longClick, modifier = Modifier.width(width).height(CardH).onFocusChanged { if (it.isFocused) onFocus() }
+    Surface(onClick = click, modifier = Modifier.width(width).height(CardH).onFocusChanged { if (it.isFocused) onFocus() }
             .then(if (expanded) Modifier.onGloballyPositioned { onBounds(it.boundsInRoot()) } else Modifier),
         shape = ClickableSurfaceDefaults.shape(shape), scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = Color.Transparent),

@@ -12,6 +12,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.outlined.RemoveCircleOutline
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.verticalScroll
@@ -303,13 +304,20 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
                 }
             }}
             CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides keepClear) {
-            Column(Modifier.width(400.dp).height(MenuRowH*3.5f+MenuGap*3).fadingEdges(menuScroll,fadePx).verticalScroll(menuScroll),verticalArrangement=Arrangement.spacedBy(MenuGap)) {
+            // Room on the sides inside the scroller: the focused row grows a little and was cut at the edge.
+            Column(Modifier.offset(x=(-12).dp).width(424.dp).height(MenuRowH*3.5f+MenuGap*3).fadingEdges(menuScroll,fadePx).verticalScroll(menuScroll).padding(horizontal=12.dp),verticalArrangement=Arrangement.spacedBy(MenuGap)) {
                 DetailMenuItem(androidx.compose.material.icons.Icons.Filled.PlayArrow,playLabel,::playChosen,Modifier.focusRequester(heroFocus),enabled=chosen!=null || movie!=null)
                 // A series' trailer is under "פרקים ועוד" › "טריילרים ועוד" (Netflix); a movie keeps it here.
                 if(!series && trailerKey!=null) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Theaters,"טריילר",{fullTrailer=true})
                 if(series) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.VideoLibrary,"פרקים ועוד",{panel="episodes"})
                 if(similar.isNotEmpty()) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.GridView,"כותרים דומים",{panel="similar"})
                 DetailMenuItem(if(favorite) androidx.compose.material.icons.Icons.Filled.Check else androidx.compose.material.icons.Icons.Filled.Add,if(favorite) "ברשימה שלי" else "הוסף לרשימה שלי",{scope.launch {vm.user.toggleFavorite(if(series) "series" else "movie",id.toString())}})
+                // Only while there is something to continue here; the title then leaves "המשך צפייה" (finished episodes keep ✓).
+                val inContinue=if(series) progress.any {!it.completed && it.positionMs>0} else resume?.let {!it.completed && it.positionMs>0} == true
+                if(inContinue) DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.RemoveCircleOutline,"הסרה מהמשך צפייה",{scope.launch {
+                    vm.user.removeFromContinue(if(series) "episode" else "movie",id.toString(),if(series) id else null)
+                    resume=if(series) vm.user.latestForSeries(id) else null
+                }})
                 DetailMenuItem(androidx.compose.material.icons.Icons.Outlined.Info,"תיאור, שחקנים ופרטים",{panel="details"})
             }
             }

@@ -59,3 +59,7 @@ Profiles under the provider login, synced across devices through the Cloudflare 
 ## Release 0.4.1 (2026-10-08)
 
 No profile is created automatically any more: a new install had made a default "ראשי" dated now, which won the sync over a deletion made on another TV and brought it back. A device without profiles now waits for the account's profiles from the server; an account with none is asked for its first profile. History kept from before profiles goes to the first profile chosen or created on the device.
+
+## Release 0.4.2 (2026-10-09)
+
+Playback: the profile sync is held while a video plays (its 30-second work showed as a small stutter on weak boxes) and catches up when playback stops or pauses. Smoother row navigation: TMDB extras no longer live in Compose state (results landing while a row slides had recomposed the whole page), in-card trailers after a 1.2 s dwell, fewer look-ups and prefetches ahead, card-size TMDB images, only the focused card reports its position; measured on the emulator (release build) dropped frames went from 19 % to 8 % and the worst 1 % of frames from 133 ms to 46 ms. Title page in Netflix TV style: text from the top, a scrolling menu that fades at its edges, "הסרה מהמשך צפייה" in the menu while there is something to continue. "פרקים ועוד": title and seasons (and "טריילרים ועוד") on the right, big episode pictures with name, plot and length on the left. Legacy pre-profile history is moved (not copied) into the first profile.

@@ -112,9 +112,6 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
     }
     // Built only when the rows or the now-playing data change, not on every focus or preview frame.
     val nowMinute = nowSec / 60
-    // Long press on a continue-watching card: remove it from the row (after a confirmation).
-    var removing by remember { mutableStateOf<ContinueItem?>(null) }
-    removing?.let { r -> tv.nakash.ui.components.RemoveFromContinueDialog(r.title, { vm.removeFromContinue(r.progress); removing = null }) { removing = null } }
     val shelves = remember(rows, nowMap, nowMinute) { rows.filter { it.items.isNotEmpty() }.map { row ->
         tv.nakash.ui.components.RowShelf(row.key, row.title, row.subtitle, row.items.map { item ->
             when (item) {
@@ -136,7 +133,7 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
                     tv.nakash.ui.components.RowCard("w${p.key}", tv.nakash.ui.components.CardKind.WIDE, item.title, wide = item.image,
                         label = if (p.durationMs > 0) "נותרו ${((p.durationMs - p.positionMs).coerceAtLeast(0) / 60000)} דק׳" else null,
                         progress = if (p.durationMs > 0) (p.positionMs.toFloat() / p.durationMs).coerceIn(0f, 1f) else null,
-                        onFocus = { vm.onFocus(item) }, onClick = { openContinue(item) }, onLongClick = { removing = item })
+                        onFocus = { vm.onFocus(item) }, onClick = { openContinue(item) })
                 }
                 else -> tv.nakash.ui.components.RowCard(keyOf(item), tv.nakash.ui.components.CardKind.WIDE, "", onClick = {})
             }
