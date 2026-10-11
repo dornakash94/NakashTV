@@ -68,6 +68,7 @@ class PlayerController @Inject constructor(
     private val user: UserRepository,
     private val preview: PreviewPlayer,
     private val profileSync: tv.nakash.data.profile.ProfileSync,
+    private val playbackPrefs: tv.nakash.data.local.PlaybackPreferences,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(PlayerUiState())
@@ -77,6 +78,9 @@ class PlayerController @Inject constructor(
     val videoFrameRate = MutableStateFlow(0f)
 
     val player: ExoPlayer by lazy { build() }
+    /** True while tunneled: frames never reach the app then, so nothing can be copied off the video surface. */
+    val tunneled: Boolean get() = trackSelector.parameters.tunnelingEnabled
+    private val trackSelector by lazy { androidx.media3.exoplayer.trackselection.DefaultTrackSelector(ctx) }
     private var playJob: Job? = null
     private var stallJob: Job? = null
     private var progressJob: Job? = null
@@ -129,6 +133,7 @@ class PlayerController @Inject constructor(
         return ExoPlayer.Builder(ctx, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dsf))
             .setLoadControl(loadControl)
+            .setTrackSelector(trackSelector)
             .setHandleAudioBecomingNoisy(true)
             .build().also { p ->
                 // Resume and seeks land on the nearest keyframe: no downloading and decoding up to a whole GOP
@@ -149,9 +154,16 @@ class PlayerController @Inject constructor(
                             val a = p.audioFormat
                             android.util.Log.i("NakashPlayback","first_frame=${p.videoSize.width}x${p.videoSize.height} declared_fps=${f?.frameRate} mime=${f?.sampleMimeType} audio=${a?.sampleMimeType} ch=${a?.channelCount} rate=${a?.sampleRate} container=${f?.containerMimeType}")
                             // The real frame rate: frames the decoder rendered over 10 s of playback.
-                            scope.launch { val c=p.videoDecoderCounters; c?.ensureUpdated(); val r0=c?.renderedOutputBufferCount ?: 0; val t0=System.nanoTime()
-                                delay(10_000); c?.ensureUpdated(); val r1=c?.renderedOutputBufferCount ?: 0
-                                android.util.Log.i("NakashPlayback","measured_fps=%.3f over %.1fs playing=${p.isPlaying}".format((r1-r0)/((System.nanoTime()-t0)/1e9),(System.nanoTime()-t0)/1e9)) }
+                            // Every 5 s for a minute: frames the decoder rendered / dropped / skipped (dropped = too late to show).
+                            scope.launch {
+                                var r0=0; var d0=0; var s0=0
+                                repeat(13) { i ->
+                                    val c=p.videoDecoderCounters; c?.ensureUpdated()
+                                    val r=c?.renderedOutputBufferCount ?: 0; val d=c?.droppedBufferCount ?: 0; val sk=c?.skippedOutputBufferCount ?: 0
+                                    if(i>0) android.util.Log.i("NakashPlayback","frames_5s rendered=${r-r0} dropped=${d-d0} skipped=${sk-s0} maxConsecDropped=${c?.maxConsecutiveDroppedBufferCount} buffer=${p.totalBufferedDuration/1000}s")
+                                    r0=r; d0=d; s0=sk; delay(5_000)
+                                }
+                            }
                         }
                     }
                     override fun onPlaybackStateChanged(s: Int) {
@@ -236,6 +248,11 @@ class PlayerController @Inject constructor(
         // A fresh decoder for every new stream. Reused across a resolution change (a 720p channel after a 1080p one),
         // the decoder's pictures were drawn unscaled in the corner over the old frame.
         player.stop()
+        // "ניגון חלק (מנהרה)": movies/episodes go straight from the decoder to the display hardware, which paces every
+        // frame against the screen (how the big streaming apps play on Android TV). Live stays untunneled (zapping).
+        val tunnel = !live && playbackPrefs.state.value.tunneling
+        if (trackSelector.parameters.tunnelingEnabled != tunnel)
+            trackSelector.setParameters(trackSelector.buildUponParameters().setTunnelingEnabled(tunnel))
         player.setMediaItem(item, if (startMs > 0) startMs else C.TIME_UNSET)
         player.prepare(); player.playWhenReady = true
         _state.update { it.copy(error = null) }

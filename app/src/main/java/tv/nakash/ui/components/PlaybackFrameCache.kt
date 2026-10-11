@@ -30,7 +30,7 @@ fun PlaybackFrameCache(view:PlayerView?,controller:PlayerController,thumbs:Thumb
         val player=controller.player
         if(player.videoSize.width<=0) return@LaunchedEffect
         val seconds=player.currentPosition/1000
-        thumbs.capture(view,key,seconds)
+        if(!controller.tunneled) thumbs.capture(view,key,seconds)
         if(!scrubbing) {
             val uri=player.currentMediaItem?.localConfiguration?.uri?.toString() ?: return@LaunchedEffect
             val duration=player.duration.takeIf {it>0} ?: return@LaunchedEffect
