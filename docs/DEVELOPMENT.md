@@ -79,3 +79,7 @@ The father confirmed 0.4.4 fixed the series freezes with refresh-rate matching O
 ## Release 0.4.6 (2026-10-11)
 
 Motion in movies/series did not look fully smooth on the owner's device, while other apps on the same device were; refresh-rate matching switched modes but did not help. On the emulator the player is clean (125 frames per 5 s at 25 fps, 0 dropped or skipped, 0 UI frames drawn during playback). Added Settings › נגן › "ניגון חלק (מנהרה)" (off by default): tunneled playback for movies/episodes through the DefaultTrackSelector, so the device's video hardware paces frames as the big streaming apps do; live stays untunneled; devices without a tunneling decoder fall back to normal playback (verified on the emulator). No frame is copied off the surface while tunneled; scrub frames come from the file. Tunneling itself is untested (no tunneling decoder on the emulator).
+
+## Release 0.4.7 (2026-10-12)
+
+Settings › כללי › "הפעלה עם הדלקת המכשיר" (on by default): a BOOT_COMPLETED receiver opens the app when the device starts. Android 10+ allows this only with "display over other apps"; without it the row says so, opens that permission screen, and offers turning the feature off. Verified on the emulator (Android 14): opens after a reboot with the permission, not without it. A TV coming back from standby does not send BOOT_COMPLETED, so there the app opens only after a full restart. The emulator's system image was moved out of the iCloud-synced folder to ~/Android/tv-image (iCloud had evicted it).
