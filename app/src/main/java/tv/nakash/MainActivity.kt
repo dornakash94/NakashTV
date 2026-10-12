@@ -17,6 +17,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var accountStore: AccountStore
     @Inject lateinit var profiles: tv.nakash.data.profile.ProfileStore
     @Inject lateinit var profileSync: tv.nakash.data.profile.ProfileSync
+    @Inject lateinit var updater: tv.nakash.data.update.AppUpdater
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         // Settings is learning a remote button: it gets every key first, before focus, dialogs or the media session.
         tv.nakash.data.local.KeyCapture.onKey?.let { listener ->
@@ -72,6 +73,9 @@ class MainActivity : ComponentActivity() {
                     profile == null -> tv.nakash.ui.profile.ProfilePickerScreen()
                     else -> androidx.compose.runtime.key(profile!!.id) { NakashNavHost() }
                 }
+                // "גרסה חדשה זמינה" over whatever screen is up (it waits while the player is on screen).
+                androidx.compose.runtime.LaunchedEffect(Unit) { updater.start() }
+                tv.nakash.ui.update.UpdateDialog(updater)
             }
         }
     }

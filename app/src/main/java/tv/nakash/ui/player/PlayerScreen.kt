@@ -114,7 +114,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
-    val controller: PlayerController, private val catalog: CatalogRepository, private val epg: EpgRepository, val thumbs: ThumbnailGenerator, val controls:tv.nakash.data.local.PlaybackPreferences,
+    val controller: PlayerController, private val catalog: CatalogRepository, private val epg: EpgRepository, val thumbs: ThumbnailGenerator, val controls:tv.nakash.data.local.PlaybackPreferences, val updater:tv.nakash.data.update.AppUpdater,
     private val userRepo: tv.nakash.data.repo.UserRepository,
 ) : ViewModel() {
     val nowNext = MutableStateFlow<Pair<EpgEntity?, EpgEntity?>>(null to null)
@@ -241,6 +241,8 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
         if(window.attributes.preferredDisplayModeId!=mode) window.attributes=window.attributes.apply {preferredDisplayModeId=mode}
     }
     DisposableEffect(Unit) {onDispose {activity?.window?.let {w -> if(w.attributes.preferredDisplayModeId!=0) w.attributes=w.attributes.apply {preferredDisplayModeId=0}}}}
+    // The update prompt waits until the player is left.
+    DisposableEffect(Unit) {vm.updater.holdPrompt.value=true;onDispose {vm.updater.holdPrompt.value=false}}
     var lastKey by remember { mutableStateOf(enteredAt) }
     val focus = remember { FocusRequester() }
     val req = st.request

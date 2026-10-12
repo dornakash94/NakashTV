@@ -7,6 +7,8 @@
     <!-- "הפעלה עם הדלקת המכשיר": start-up broadcast, and opening the app from it (Android 10+). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <!-- In-app updates: the app hands a downloaded release to Android's installer (the user confirms it). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <uses-feature android:name="android.software.leanback" android:required="false"/>
     <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
 
@@ -31,6 +33,8 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <receiver android:name=".data.update.InstallResultReceiver" android:exported="false"/>
 
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
