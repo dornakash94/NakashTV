@@ -83,3 +83,7 @@ Motion in movies/series did not look fully smooth on the owner's device, while o
 ## Release 0.4.7 (2026-10-12)
 
 Settings › כללי › "הפעלה עם הדלקת המכשיר" (on by default): a BOOT_COMPLETED receiver opens the app when the device starts. Android 10+ allows this only with "display over other apps"; without it the row says so, opens that permission screen, and offers turning the feature off. Verified on the emulator (Android 14): opens after a reboot with the permission, not without it. A TV coming back from standby does not send BOOT_COMPLETED, so there the app opens only after a full restart. The emulator's system image was moved out of the iCloud-synced folder to ~/Android/tv-image (iCloud had evicted it).
+
+## Release 0.4.8 (2026-10-12)
+
+In-app updates: the sync Worker serves `GET /v1/app?channel=stable|debug` from the `app_release` D1 table; the app checks on start and every 6 hours, offers the release (עדכון עכשיו / אחר כך with a 24 h snooze, or mandatory), asks once for "install unknown apps", downloads the APK and hands it to PackageInstaller; the prompt waits while the player is on screen; debug builds read the debug channel. **On every release, after uploading the APK, set the stable row** (versionCode, versionName, url, notes, mandatory) with `wrangler d1 execute nakashtv-sync --remote --command "INSERT OR REPLACE INTO app_release ..."`. Devices on 0.4.7 or older update to 0.4.8 through Downloader once. Profile photos stored inside the profile as a data URI (the parents' profile) are decoded and shown; 0.4.7 shows a plain square for them.
