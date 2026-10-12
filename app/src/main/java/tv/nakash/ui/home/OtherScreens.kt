@@ -95,6 +95,17 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
         Column(Modifier.weight(1f).padding(top=58.dp),verticalArrangement=Arrangement.spacedBy(2.dp)) {
             when(section) {
                 0 -> {
+                    // Re-read when coming back from the permission screen.
+                    val ctx=androidx.compose.ui.platform.LocalContext.current
+                    var bootTick by remember {mutableIntStateOf(0)}
+                    val owner=androidx.lifecycle.compose.LocalLifecycleOwner.current
+                    DisposableEffect(owner) {val o=androidx.lifecycle.LifecycleEventObserver {_,e -> if(e==androidx.lifecycle.Lifecycle.Event.ON_RESUME) bootTick++};owner.lifecycle.addObserver(o);onDispose {owner.lifecycle.removeObserver(o)}}
+                    val bootOn=remember(bootTick) {tv.nakash.StartOnBoot.enabled(ctx)}
+                    val bootAllowed=remember(bootTick) {tv.nakash.StartOnBoot.allowed(ctx)}
+                    SettingRow("הפעלה עם הדלקת המכשיר",when {!bootOn -> "כבוי";bootAllowed -> "פעיל";else -> "פעיל · צריך לאשר \"הצגה מעל אפליקציות אחרות\" (לחיצה פותחת)"}) {
+                        if(bootOn && !bootAllowed) tv.nakash.StartOnBoot.openPermission(ctx) else {tv.nakash.StartOnBoot.set(ctx,!bootOn);bootTick++}
+                    }
+                    if(bootOn && !bootAllowed) SettingRow("כיבוי ההפעלה עם הדלקת המכשיר","") {tv.nakash.StartOnBoot.set(ctx,false);bootTick++}
                     SettingRow("רענון כל התכנים", if(busy) "מעדכנים…" else "ערוצים, סרטים, סדרות ולוח שידורים", enabled=!busy) {vm.refresh()}
                     SettingRow("הצג שוב ערוצים שהוסתרו","") {vm.restoreChannels()}
                     SettingRow("טריילרים ומידע מ־TMDB", if(tmdbKey!=null) "מחובר" else "הוספת מפתח API") {editingTmdb=true}
