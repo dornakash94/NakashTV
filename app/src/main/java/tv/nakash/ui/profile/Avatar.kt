@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
@@ -83,6 +84,16 @@ fun Avatar(avatar: Int, name: String, color: Color, size: Dp, modifier: Modifier
     val person = PEOPLE.getOrNull(avatar)
     Box(modifier.clip(AvatarShape).background(color), contentAlignment = Alignment.Center) {
         when {
+            // A photo kept inside the profile itself ("data:image/jpeg;base64,…"): decoded here, once (the image loader
+            // does not read data URIs). It syncs with the profile, so no public link to a family photo exists.
+            url != null && url.startsWith("data:image") -> {
+                val bitmap = androidx.compose.runtime.remember(url) {
+                    runCatching { val bytes = android.util.Base64.decode(url.substringAfter(","), android.util.Base64.DEFAULT)
+                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }.getOrNull()
+                }
+                if (bitmap != null) androidx.compose.foundation.Image(bitmap, name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                else Text(name.trim().take(1).uppercase(), style = TextStyle(fontSize = (size.value * .42f).sp, color = Color.White))
+            }
             url != null -> AsyncImage(url, name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter)
             person != null -> Canvas(Modifier.fillMaxSize()) { drawPerson(person) }
             avatar in 16 until 24 -> Canvas(Modifier.fillMaxSize()) { drawAnimal(Animal.entries[avatar - 16], ANIMAL_BG[avatar - 16]) }
