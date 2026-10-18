@@ -9,7 +9,7 @@ cd NakashTV
 
 For existing checkouts, commit or stash your changes, then run `git pull --ff-only`.
 
-Development source: **0.4.9**. Published APK: [0.4.9](https://github.com/dornakash94/NakashTV/releases/tag/v0.4.9). See [development notes](docs/DEVELOPMENT.md) for the current workflow.
+Development source: **0.5.0**. Published APK: [0.5.0](https://github.com/dornakash94/NakashTV/releases/tag/v0.5.0). See [development notes](docs/DEVELOPMENT.md) for the current workflow.
 
 
 Native Android TV client in Kotlin, Compose for TV, Media3, Room and Hilt. Hebrew RTL interface with a bundled Heebo font and dark/gold theme.
