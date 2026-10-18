@@ -75,7 +75,8 @@ import javax.inject.Inject
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), playerVm: PlayerEntry = hiltViewModel()) {
-    val rows by vm.rows.collectAsState()
+    val loaded by vm.rows.collectAsState()
+    val rows = loaded.orEmpty()
     // Read when needed (not collected): it changes on every focus move and recomposed the whole screen each time.
     val nowMap by vm.nowMap.collectAsState()
     val nowSec = System.currentTimeMillis() / 1000
@@ -140,7 +141,8 @@ fun HomeScreen(nav: NavHostController, vm: HomeViewModel = hiltViewModel(), play
         })
     } }
     Box(Modifier.fillMaxSize()) {
-        if (rows.all { it.items.isEmpty() }) Column(Modifier.padding(top = 90.dp, start = 40.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        if (loaded == null) Unit
+        else if (rows.all { it.items.isEmpty() }) Column(Modifier.padding(top = 90.dp, start = 40.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("ברוכים הבאים ל־NakashTV", style = MaterialTheme.typography.headlineMedium)
             Text("התכנים נטענים מהספק. אם הספרייה נשארת ריקה, אפשר לרענן אותה בהגדרות.", color = NakashColors.Muted)
             tv.nakash.ui.library.Action("מעבר להגדרות", { nav.navigate("settings") })

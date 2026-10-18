@@ -26,6 +26,12 @@ import tv.nakash.ui.theme.NakashColors
 @Composable
 fun UpdateDialog(updater: AppUpdater) {
     val state by updater.state.collectAsState()
+    // Back from Android's settings with the switch on: the update carries on without another press.
+    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val o = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) updater.resumeIfPermitted() }
+        owner.lifecycle.addObserver(o); onDispose { owner.lifecycle.removeObserver(o) }
+    }
     val held by updater.holdPrompt.collectAsState()
     if (state is UpdateState.None || held) return
     val release = when (val s = state) {
@@ -49,12 +55,14 @@ fun UpdateDialog(updater: AppUpdater) {
                         }
                     }
                     is UpdateState.NeedsPermission -> {
-                        Text("כדי שהאפליקציה תוכל להתעדכן בעצמה, צריך לאשר פעם אחת \"התקנת אפליקציות לא מוכרות\" עבור NakashTV. אחרי האישור חוזרים לכאן ולוחצים \"המשך\".",
-                            color = NakashColors.Muted, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp, lineHeight = 23.sp))
+                        val text = if (s.noScreen)
+                            "המכשיר הזה לא מאפשר לאשר עדכונים מתוך האפליקציה. אפשר לעדכן דרך Downloader עם הקוד 4033247."
+                        else
+                            "כדי שהאפליקציה תוכל להתעדכן, Android צריך אישור חד-פעמי: במסך שנפתח מדליקים את NakashTV (\"התקנת אפליקציות לא מוכרות\") ולוחצים חזור. העדכון ימשיך לבד."
+                        Text(text, color = NakashColors.Muted, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp, lineHeight = 23.sp))
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Action("פתיחת ההגדרות", { updater.openPermission() }, Modifier.focusRequester(first))
-                            Action("המשך", { updater.install() })
-                            if (!release.mandatory) Action("אחר כך", { updater.later() })
+                            if (!s.noScreen) Action("פתיחת ההגדרות שוב", { updater.install() }, Modifier.focusRequester(first))
+                            if (!release.mandatory) Action("אחר כך", { updater.later() }, if (s.noScreen) Modifier.focusRequester(first) else Modifier)
                         }
                     }
                     is UpdateState.Downloading -> {

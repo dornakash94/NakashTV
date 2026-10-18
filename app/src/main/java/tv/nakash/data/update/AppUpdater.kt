@@ -38,7 +38,7 @@ sealed interface UpdateState {
     data object None : UpdateState
     data class Available(val release: AppRelease) : UpdateState
     /** Android needs "install unknown apps" for NakashTV first (once per device). */
-    data class NeedsPermission(val release: AppRelease) : UpdateState
+    data class NeedsPermission(val release: AppRelease, val noScreen: Boolean = false) : UpdateState
     data class Downloading(val release: AppRelease, val percent: Int) : UpdateState
     data class Installing(val release: AppRelease) : UpdateState
     data class Failed(val release: AppRelease, val message: String) : UpdateState
@@ -88,29 +88,51 @@ class AppUpdater @Inject constructor(okHttp: OkHttpClient, @ApplicationContext p
 
     fun install() {
         val r = releaseOf(_state.value) ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !ctx.packageManager.canRequestPackageInstalls()) {
-            _state.value = UpdateState.NeedsPermission(r); return
+        if (!permitted()) {
+            // Straight to Android's switch; back from it, the update goes on by itself ([resumeIfPermitted]).
+            _state.value = UpdateState.NeedsPermission(r, noScreen = !openPermission()); return
         }
         scope.launch {
             try {
                 val apk = download(r)
+                val dm = runCatching { downloadProfile(r) }.getOrNull()
                 _state.value = UpdateState.Installing(r)
-                withContext(Dispatchers.IO) { commit(apk) }
+                withContext(Dispatchers.IO) { commit(apk, dm) }
             } catch (e: Exception) {
                 _state.value = UpdateState.Failed(r, "ההורדה נכשלה. אפשר לנסות שוב.")
             }
         }
     }
 
-    /** Opens Android's "install unknown apps" switch for NakashTV. */
-    fun openPermission() {
-        val i = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (runCatching { ctx.startActivity(i) }.isFailure)
-            runCatching { ctx.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    private fun permitted() = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || ctx.packageManager.canRequestPackageInstalls()
+
+    /** The app is on screen again (back from the settings): if the switch is now on, carry on with the update. */
+    fun resumeIfPermitted() { if (_state.value is UpdateState.NeedsPermission && permitted()) install() }
+
+    /**
+     * Opens Android's "install unknown apps" switch for NakashTV. False when the device has no such screen (some TV
+     * builds hide it), so the dialog can say how to update instead.
+     */
+    fun openPermission(): Boolean {
+        val tries = listOf(
+            Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}")),
+            Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES),
+            Intent(Settings.ACTION_SECURITY_SETTINGS),
+        )
+        for (i in tries) {
+            if (runCatching { ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess) return true
+        }
+        return false
     }
 
     internal fun installResult(status: Int, message: String?) {
         val r = releaseOf(_state.value) ?: return
+        // Should a device refuse the compiled-code profile, install the APK alone rather than fail the update.
+        val apk = lastApk
+        if (status != PackageInstaller.STATUS_SUCCESS && status != PackageInstaller.STATUS_FAILURE_ABORTED && lastHadProfile && apk != null && apk.isFile) {
+            scope.launch { runCatching { commit(apk, null) }.onFailure { _state.value = UpdateState.Failed(r, "ההתקנה לא הצליחה.") } }
+            return
+        }
         _state.value = when (status) {
             PackageInstaller.STATUS_SUCCESS -> UpdateState.None
             PackageInstaller.STATUS_FAILURE_ABORTED -> UpdateState.Available(r)   // the user pressed cancel
@@ -138,12 +160,32 @@ class AppUpdater @Inject constructor(okHttp: OkHttpClient, @ApplicationContext p
         file
     }
 
-    private fun commit(apk: File) {
+    /**
+     * The release's compiled-code profile (`NakashTV-28.dm` / `NakashTV-31.dm` next to the APK). Installed together,
+     * Android compiles the app right at install, so the first launches after an update are not slow. Optional.
+     */
+    private fun downloadProfile(r: AppRelease): File? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !r.url.endsWith(".apk")) return null
+        val url = r.url.removeSuffix(".apk") + if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) "-31.dm" else "-28.dm"
+        val file = File(ctx.cacheDir, "updates/NakashTV-${r.versionCode}.dm")
+        client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+            if (!resp.isSuccessful) return null
+            resp.body?.byteStream()?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: return null
+        }
+        return file.takeIf { it.length() > 0 }
+    }
+
+    @Volatile private var lastApk: File? = null
+    @Volatile private var lastHadProfile = false
+
+    private fun commit(apk: File, dm: File?) {
+        lastApk = apk; lastHadProfile = dm != null
         val installer = ctx.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply { setAppPackageName(ctx.packageName) }
         val id = installer.createSession(params)
         installer.openSession(id).use { session ->
             session.openWrite("NakashTV.apk", 0, apk.length()).use { out -> apk.inputStream().use { it.copyTo(out) }; session.fsync(out) }
+            if (dm != null) session.openWrite("NakashTV.dm", 0, dm.length()).use { out -> dm.inputStream().use { it.copyTo(out) }; session.fsync(out) }
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
             val pi = PendingIntent.getBroadcast(ctx, id, Intent(ctx, InstallResultReceiver::class.java).setPackage(ctx.packageName), flags)
             session.commit(pi.intentSender)

@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        androidx.core.splashscreen.SplashScreen.Companion.run { installSplashScreen() }
         super.onCreate(savedInstanceState)
         getSystemService(android.hardware.display.DisplayManager::class.java)?.registerDisplayListener(displays, null)
         // Debug builds only: `am start ... --es route seriesDetail/123` opens that screen after the profile is chosen.

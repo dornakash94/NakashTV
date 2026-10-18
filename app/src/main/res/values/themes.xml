@@ -3,4 +3,10 @@
         <item name="android:windowBackground">#0A0A0C</item>
         <item name="android:statusBarColor">#0A0A0C</item>
     </style>
+    <!-- Shown from the remote press until the first screen draws: the logo on the app's background, not a blank window. -->
+    <style name="Theme.NakashTV.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#0A0A0C</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_logo</item>
+        <item name="postSplashScreenTheme">@style/Theme.NakashTV</item>
+    </style>
 </resources>

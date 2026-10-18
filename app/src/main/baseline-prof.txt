@@ -1,0 +1,27 @@
+# NakashTV startup / browsing profile: compiled ahead of time at install, so the first launches after an update are not
+# run in the interpreter on slow TV boxes. Wildcards keep it valid as the code changes (the app's own code is small).
+HSPLtv/nakash/**->**(**)**
+Ltv/nakash/**;
+# Libraries on the start-up and browsing path that do not ship a profile of their own.
+HSPLokhttp3/**->**(**)**
+Lokhttp3/**;
+HSPLokio/**->**(**)**
+Lokio/**;
+HSPLkotlinx/serialization/**->**(**)**
+Lkotlinx/serialization/**;
+HSPLkotlinx/coroutines/**->**(**)**
+Lkotlinx/coroutines/**;
+HSPLretrofit2/**->**(**)**
+Lretrofit2/**;
+HSPLcoil3/**->**(**)**
+Lcoil3/**;
+HSPLdagger/hilt/**->**(**)**
+Ldagger/hilt/**;
+HSPLandroidx/room/**->**(**)**
+Landroidx/room/**;
+HSPLandroidx/navigation/**->**(**)**
+Landroidx/navigation/**;
+HSPLandroidx/tv/**->**(**)**
+Landroidx/tv/**;
+HSPLandroidx/media3/**->**(**)**
+Landroidx/media3/**;

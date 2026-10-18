@@ -77,7 +77,8 @@ class HomeViewModel @Inject constructor(
             israel.asSequence().filter { kidsPattern.containsMatchIn(it.displayName) }.take(24).toList(),
             israel.asSequence().filter { docsPattern.containsMatchIn(it.displayName) }.take(24).toList())
     }.distinctUntilChanged()
-    val rows: StateFlow<List<HomeRow>> = combine(
+    /** null until the first rows are read (the welcome / empty-library message must not flash on every start). */
+    val rows: StateFlow<List<HomeRow>?> = combine(
         user.continueWatching(), favChannels, catalog.newestMovies(24), catalog.recentlyUpdatedSeries(24), combine(themed, extras, recRows) { a, b, r -> Triple(a, b, r) },
     ) { cont, favs, movies, series, (themedRows, extra, personal) ->
         val (mine, hasFavs) = extra
@@ -106,7 +107,7 @@ class HomeViewModel @Inject constructor(
             if (kids.isNotEmpty()) add(HomeRow("kids", "ילדים", items = kids))
             if (docs.isNotEmpty()) add(HomeRow("docs", "דוקו וטבע", items = docs))
         }
-    }.distinctUntilChanged().flowOn(kotlinx.coroutines.Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    }.distinctUntilChanged().flowOn(kotlinx.coroutines.Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** now/next per channel, refreshed lazily on focus and every minute for visible channels. */
     val nowMap = MutableStateFlow<Map<String, EpgEntity>>(emptyMap())
