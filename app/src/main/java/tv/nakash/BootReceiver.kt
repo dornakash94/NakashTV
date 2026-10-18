@@ -14,10 +14,28 @@ import android.provider.Settings
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         if (intent.action !in BOOT_ACTIONS || !StartOnBoot.enabled(ctx) || !StartOnBoot.allowed(ctx)) return
-        ctx.startActivity(Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        // Not in the middle of the device's own start-up: wait until the screen is on, then a few seconds more for the
+        // launcher and the HDMI output to settle (a video started into that could stay frozen on some boxes).
+        val pending = goAsync()
+        val power = ctx.getSystemService(android.os.PowerManager::class.java)
+        val main = android.os.Handler(android.os.Looper.getMainLooper())
+        val startedAt = android.os.SystemClock.elapsedRealtime()
+        var awakeAt = 0L
+        fun step() {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (awakeAt == 0L && power?.isInteractive != false) awakeAt = now
+            if ((awakeAt > 0 && now - awakeAt >= SETTLE_MS) || now - startedAt >= MAX_WAIT_MS) {
+                if (power?.isInteractive != false) runCatching { ctx.startActivity(Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                pending.finish(); return
+            }
+            main.postDelayed(::step, 500)
+        }
+        step()
     }
 
     companion object {
+        private const val SETTLE_MS = 4_000L
+        private const val MAX_WAIT_MS = 25_000L
         private val BOOT_ACTIONS = setOf(Intent.ACTION_BOOT_COMPLETED, "android.intent.action.QUICKBOOT_POWERON", "com.htc.intent.action.QUICKBOOT_POWERON")
     }
 }

@@ -75,5 +75,10 @@ class PreviewPlayer @Inject constructor(@ApplicationContext ctx: Context, okHttp
             stop(owner)
         }
     }
+    private var resumeStream:Int?=null
+    private var resumeOwner:Any?=null
+    /** The app left the screen: the hero preview stops (and starts again on return); an episode excerpt just ends. */
+    fun background() { if(current==null && job?.isActive!=true && !player.isPlaying) return;resumeStream=current;resumeOwner=currentOwner;stop() }
+    fun foreground() { val id=resumeStream ?: return;resumeStream=null;focus(id,resumeOwner) }
     fun stop(owner:Any?=null) { if(owner!=null && currentOwner!==owner) return;job?.cancel(); current=null;currentOwner=null;hasFrame.value=false;player.stop();player.clearMediaItems() }
 }

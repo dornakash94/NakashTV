@@ -18,6 +18,9 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var profiles: tv.nakash.data.profile.ProfileStore
     @Inject lateinit var profileSync: tv.nakash.data.profile.ProfileSync
     @Inject lateinit var updater: tv.nakash.data.update.AppUpdater
+    @Inject lateinit var playback: tv.nakash.player.PlayerController
+    @Inject lateinit var preview: tv.nakash.player.PreviewPlayer
+    private var stopped = false
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         // Settings is learning a remote button: it gets every key first, before focus, dialogs or the media session.
         tv.nakash.data.local.KeyCapture.onKey?.let { listener ->
@@ -37,12 +40,43 @@ class MainActivity : ComponentActivity() {
         }
         return super.dispatchKeyEvent(event)
     }
-    /** Leaving the app (home button, another input): free the trailer renderer and decoded images. */
+    /** Leaving the app (home button, another input): stop every video, free the trailer renderer and decoded images. */
     override fun onStop() {
         super.onStop()
+        stopped = true
+        playback.background(); preview.background()
         profileSync.syncOnLeave(this)
         tv.nakash.ui.components.TrailerPlayer.release()
         coil3.SingletonImageLoader.get(this).memoryCache?.clear()
+    }
+
+    /** Back on screen: the video gets a fresh surface (the old one went away with the window), live is tuned again. */
+    override fun onStart() {
+        super.onStart()
+        if (!stopped) return
+        stopped = false
+        playback.surfaceEpoch.value++
+        playback.foreground(); preview.foreground()
+    }
+
+    /**
+     * The screen came on (TV boxes finish switching the HDMI output on after start-up, while the app may already be up):
+     * a video surface made before that can stay frozen on some boxes, so the player builds a new one.
+     */
+    private val displays = object : android.hardware.display.DisplayManager.DisplayListener {
+        private var on = true
+        override fun onDisplayAdded(id: Int) {}
+        override fun onDisplayRemoved(id: Int) {}
+        override fun onDisplayChanged(id: Int) {
+            if (id != android.view.Display.DEFAULT_DISPLAY) return
+            val now = getSystemService(android.hardware.display.DisplayManager::class.java)?.getDisplay(id)?.state == android.view.Display.STATE_ON
+            if (now && !on) playback.surfaceEpoch.value++
+            on = now
+        }
+    }
+    override fun onDestroy() {
+        getSystemService(android.hardware.display.DisplayManager::class.java)?.unregisterDisplayListener(displays)
+        super.onDestroy()
     }
 
     /** TVs run with little memory: give back the heaviest things before the system has to kill the app. */
@@ -56,6 +90,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        getSystemService(android.hardware.display.DisplayManager::class.java)?.registerDisplayListener(displays, null)
         // Debug builds only: `am start ... --es route seriesDetail/123` opens that screen after the profile is chosen.
         if (BuildConfig.DEBUG) intent?.getStringExtra("route")?.let { tv.nakash.ui.nav.DebugRoute.pending = it }
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)

@@ -143,6 +143,7 @@ class PlayerController @Inject constructor(
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         _state.update { it.copy(isPlaying = isPlaying) }
                         profileSync.hold(isPlaying)
+                        if (isPlaying) watchFrames() else watchJob?.cancel()
                         if(tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashPlayback","playing=$isPlaying")
                     }
                     override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
@@ -178,7 +179,7 @@ class PlayerController @Inject constructor(
 
     // ---------- public API ----------
     fun play(req: PlayRequest) {
-        _ended.value=0L
+        _ended.value=0L; recoveries=0; resumeOnReturn=null
         // One video at a time: the card preview and the trailer web renderer give their decoders and memory back.
         videoFrameRate.value = 0f
         preview.stop(); tv.nakash.ui.components.TrailerPlayer.release(); saveNow(); stopProgress(); stallJob?.cancel(); playJob?.cancel(); m3u8Failures = 0
@@ -237,9 +238,64 @@ class PlayerController @Inject constructor(
     fun toast(msg: String) { _state.update { it.copy(toast = msg) } }
 
     fun stop() {
+        resumeOnReturn=null; watchJob?.cancel()
         playJob?.cancel(); stallJob?.cancel(); stopProgress(); saveNow()
         player.stop(); player.clearMediaItems()
         _state.value = PlayerUiState()
+    }
+
+    // ---------- the app leaves / comes back to the screen ----------
+    private var resumeOnReturn: PlayRequest.Live? = null
+    /**
+     * Home button or another app on top: nothing keeps playing behind the launcher. Live lets go of the stream and is
+     * tuned again on return; a movie, episode or catch-up pauses where it is (progress saved).
+     */
+    fun background() {
+        val st = _state.value; val req = st.request ?: return
+        if (req is PlayRequest.Live) {
+            resumeOnReturn = req.copy(sourceIndex = st.sourceIndex)
+            playJob?.cancel(); stallJob?.cancel(); player.stop()
+        } else { player.pause(); saveNow() }
+    }
+    fun foreground() {
+        val req = resumeOnReturn ?: return; resumeOnReturn = null
+        if ((_state.value.request as? PlayRequest.Live)?.channel?.id == req.channel.id) play(req)
+    }
+
+    /** Bumped to have the screen build a fresh video view (a new surface), see [watchFrames]. */
+    val surfaceEpoch = MutableStateFlow(0)
+    private var watchJob: Job? = null
+    private var recoveries = 0
+    /**
+     * A picture that stands still while the clock runs on (TV boxes, right after the app opened itself at start-up):
+     * the video stopped coming out of the decoder. Checked every 2 s while playing: no new frame for two checks in a
+     * row while the position moved on means the video path is rebuilt (a new view and a fresh decoder, same spot).
+     * At most twice per title. Not when tunneled: frames do not pass through the app then.
+     */
+    private fun watchFrames() {
+        watchJob?.cancel()
+        if (tunneled) return
+        watchJob = scope.launch {
+            var lastRendered = -1; var lastPos = player.currentPosition; var stalls = 0
+            while (true) {
+                delay(2_000)
+                val counters = player.videoDecoderCounters
+                if (player.videoFormat == null || counters == null) { lastRendered = -1; continue }
+                counters.ensureUpdated()
+                val rendered = counters.renderedOutputBufferCount; val pos = player.currentPosition
+                stalls = if (lastRendered >= 0 && rendered == lastRendered && pos - lastPos >= 1_500) stalls + 1 else 0
+                lastRendered = rendered; lastPos = pos
+                if (stalls >= 2 && recoveries < 2) { recoveries++; recoverVideo(); return@launch }
+            }
+        }
+    }
+    private fun recoverVideo() {
+        if (tv.nakash.BuildConfig.DEBUG) android.util.Log.w("NakashPlayback", "video_stalled recover=$recoveries")
+        surfaceEpoch.value++
+        when (val req = _state.value.request ?: return) {
+            is PlayRequest.Live -> { val n = recoveries; play(req.copy(sourceIndex = _state.value.sourceIndex)); recoveries = n }
+            else -> { val pos = player.currentPosition; player.stop(); player.seekTo(pos); player.prepare(); player.playWhenReady = true }
+        }
     }
 
     // ---------- internals ----------

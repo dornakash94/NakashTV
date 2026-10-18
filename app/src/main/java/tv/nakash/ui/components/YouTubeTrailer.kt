@@ -10,7 +10,10 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 
@@ -45,8 +48,21 @@ fun YouTubeTrailer(videoKey: String, muted: Boolean, modifier: Modifier = Modifi
           events:{onReady:function(e){e.target.playVideo();},onApiChange:hebrewCaptions,onError:function(e){Android.error(e.data);},onStateChange:function(e){if(e.data==0)Android.ended();if(e.data==1)Android.playing();}}});}
         </script></body></html>""".trimIndent() }
     DisposableEffect(videoKey) { onDispose { handle?.view = null } }
+    // Home button / another app on top: the trailer stops with the screen and goes on when the app is back.
+    var web by remember { mutableStateOf<WebView?>(null) }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            val w = web ?: return@LifecycleEventObserver
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) runCatching { w.evaluateJavascript("if(window.player&&player.pauseVideo)player.pauseVideo()", null); w.onPause() }
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_START) runCatching { w.onResume(); w.evaluateJavascript("if(window.player&&player.playVideo)player.playVideo()", null) }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     AndroidView(modifier = modifier, factory = { ctx ->
         WebView(ctx).apply {
+            web = this
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             setBackgroundColor(Color.BLACK)
             isFocusable = false; isFocusableInTouchMode = false; descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS

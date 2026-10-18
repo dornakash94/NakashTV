@@ -436,7 +436,8 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
                 }
             }.focusRequester(focus).onFocusChanged { playerFocused=it.isFocused }.focusable(),
     ) {
-        AndroidView(factory = { ctx -> RelayoutFrame(ctx,vm.controller.player).apply { addView(PlayerView(ctx).apply { useController = false; keepScreenOn = true; isFocusable = false; descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS; player = vm.controller.player;videoView=this }) } }, modifier = Modifier.fillMaxSize(),update={(it.getChildAt(0) as PlayerView).resizeMode=controls.aspectMode},onRelease={(it.getChildAt(0) as PlayerView).player=null;it.detach()})
+        val surfaceEpoch by vm.controller.surfaceEpoch.collectAsState()
+        androidx.compose.runtime.key(surfaceEpoch) { AndroidView(factory = { ctx -> RelayoutFrame(ctx,vm.controller.player).apply { addView(PlayerView(ctx).apply { useController = false; keepScreenOn = true; isFocusable = false; descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS; player = vm.controller.player;videoView=this }) } }, modifier = Modifier.fillMaxSize(),update={(it.getChildAt(0) as PlayerView).resizeMode=controls.aspectMode},onRelease={(it.getChildAt(0) as PlayerView).player=null;it.detach()}) }
 
         if(st.isBuffering) BufferingSpinner(Modifier.align(Alignment.Center))
         if(nearEnd && nextEpisode!=null) Text("הפרק הבא: ${nextEpisode!!.title} · ▲ לצפייה", color=NakashColors.Accent, modifier=Modifier.align(Alignment.TopCenter).background(NakashColors.Bg).padding(20.dp))
