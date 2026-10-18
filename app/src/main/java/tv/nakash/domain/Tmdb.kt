@@ -12,7 +12,9 @@ import kotlinx.serialization.json.booleanOrNull
 
 data class TmdbCast(val name: String, val character: String?, val photo: String?)
 data class TmdbTitle(val id: Int, val title: String, val original: String?, val year: Int?, val poster: String?)
-data class TmdbDetails(val trailerKey: String?, val backdrop: String?, val overview: String?, val cast: List<TmdbCast>, val similar: List<TmdbTitle>)
+data class TmdbDetails(val trailerKey: String?, val backdrop: String?, val overview: String?, val cast: List<TmdbCast>, val similar: List<TmdbTitle>,
+                       /** The film series the movie belongs to (TMDB "collection"), for "להשלים את …". */
+                       val collectionId: Int? = null, val collectionName: String? = null)
 
 /** Pure parsing of TMDB v3 responses (details with append_to_response=videos,credits,recommendations). */
 object TmdbParser {
@@ -41,8 +43,18 @@ object TmdbParser {
             TmdbTitle(id, title, if (tv) r.str("original_name") else r.str("original_title"),
                 (if (tv) r.str("first_air_date") else r.str("release_date"))?.take(4)?.toIntOrNull(), r.str("poster_path")?.let { IMG + "w342" + it })
         }
-        return TmdbDetails(trailer, o.str("backdrop_path")?.let { IMG + "w1280" + it }, o.str("overview"), cast, similar)
+        val collection = o["belongs_to_collection"] as? JsonObject
+        return TmdbDetails(trailer, o.str("backdrop_path")?.let { IMG + "w1280" + it }, o.str("overview"), cast, similar,
+            collection?.get("id")?.jsonPrimitive?.intOrNull, collection?.str("name"))
     }
+
+    /** The movies of a TMDB collection, oldest first. */
+    fun collectionParts(body: String): List<TmdbTitle> =
+        (json.parseToJsonElement(body).jsonObject["parts"] as? JsonArray ?: JsonArray(emptyList())).mapNotNull { it as? JsonObject }.mapNotNull { r ->
+            val id = r["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+            val title = r.str("title") ?: return@mapNotNull null
+            TmdbTitle(id, title, r.str("original_title"), r.str("release_date")?.take(4)?.toIntOrNull(), r.str("poster_path")?.let { IMG + "w342" + it })
+        }.sortedBy { it.year ?: 9999 }
 
     /** The titles of a /trending response, for matching to the library. */
     fun trending(body: String, tv: Boolean): List<TmdbTitle> =

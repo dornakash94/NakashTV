@@ -65,4 +65,55 @@ class RecommenderTest {
         val seeds = Recommender.seeds(h, movies, emptyList()).map { (it as MovieLite).id }
         assertThat(seeds).containsExactly(1, 2).inOrder()
     }
+
+    private fun castMovie(id: Int, cast: String, cats: String = "") = MovieLite(id, "m$id", 2020, "דרמה", 7.0, null, null, 110, cats, cast)
+
+    @Test fun actorsSeenInTwoWatchedTitlesGetARow() {
+        val movies = listOf(castMovie(1, "Kit Harington, Emilia Clarke"), castMovie(2, "Kit Harington, Rose Leslie"), castMovie(3, "Kit Harington"), castMovie(4, "Emilia Clarke"))
+        val h = Recommender.History(listOf(watched(1), watched(2)), emptyList())
+        assertThat(Recommender.topActors(h, movies, emptyList(), now = now)).containsExactly("Kit Harington")
+        assertThat(Recommender.byActor("Kit Harington", movies, emptyList(), h.seenKeys()).map { it.second }).containsExactly(3)
+    }
+
+    @Test fun watchedProviderCategoriesLeadButBroadOnesDoNot() {
+        // Category 73 (Turkish, 8 titles) was watched twice; category 2 holds everything and says nothing.
+        val series = (1..30).map { SeriesLite(it, "s$it", 2020, "דרמה", 7.0, null, if (it <= 8) "2,73" else "2") }
+        val ep = { sid: Int -> WatchProgressEntity("episode:$sid", "episode", "e$sid", sid, 10, 100, now) }
+        val h = Recommender.History(listOf(ep(1), ep(2)), emptyList())
+        assertThat(Recommender.topCategories(h, emptyList(), series, now = now)).containsExactly("73")
+        assertThat(Recommender.categoryTitle("סדרות טורקיות")).isEqualTo("עוד סדרות טורקיות")
+        assertThat(Recommender.categoryTitle("נטפליקס")).isEqualTo("עוד מ־נטפליקס")
+    }
+
+    @Test fun newEpisodesOnlyForSeriesUpdatedAfterTheLastViewing() {
+        val ep = { sid: Int, at: Long -> WatchProgressEntity("episode:$sid", "episode", "e$sid", sid, 10, 100, at) }
+        val day = 86_400_000L
+        val series = listOf(
+            SeriesLite(1, "a", 2020, "", 7.0, null, lastModified = (now - day) / 1000),        // updated after viewing -> yes
+            SeriesLite(2, "b", 2020, "", 7.0, null, lastModified = (now - 10 * day) / 1000),   // updated before viewing -> no
+            SeriesLite(3, "c", 2020, "", 7.0, null, lastModified = (now - day) / 1000))        // never watched -> no
+        val h = Recommender.History(listOf(ep(1, now - 5 * day), ep(2, now - 5 * day)), emptyList())
+        assertThat(Recommender.newEpisodes(h, series, now)).containsExactly(1)
+    }
+
+    @Test fun aMovieLeftInItsFirstMinutesCountsAgainstItsGenres() {
+        val movies = listOf(movie(1, "קומדיה"), movie(2, "אימה"))
+        val left = WatchProgressEntity("movie:2", "movie", "2", null, 5, 100, now - 5 * 86_400_000L)
+        val a = Recommender.genreAffinity(Recommender.History(listOf(watched(1), left), emptyList()), movies, emptyList(), now)
+        assertThat(a["אימה"]!!).isLessThan(0.0)
+    }
+
+    @Test fun rowsPassedWithoutOpeningSlideDownAndOpenedOnesRise() {
+        assertThat(Recommender.rowShift(0, 0)).isEqualTo(0.0)
+        assertThat(Recommender.rowShift(6, 0)).isEqualTo(2.0)
+        assertThat(Recommender.rowShift(6, 2)).isLessThan(0.0)
+    }
+
+    @Test fun themedRowsCanFollowProviderCategories() {
+        val items = (1..10).map { Curated.Item(it, 2020, "דרמה", 7.0, 50, if (it <= 7) "73" else "9") }
+        val specs = listOf(Curated.Spec("turkish", "דרמות טורקיות", categories = listOf("טורקיות"), minRating = 0.0))
+        val rows = Curated.rows(items, true, LocalDate.of(2026, 10, 18), specs = specs, categoryNames = mapOf("73" to "סדרות טורקיות", "9" to "סדרות מהעולם"))
+        assertThat(rows.single().key).isEqualTo("c_turkish")
+        assertThat(rows.single().ids.toSet()).isEqualTo((1..7).toSet())
+    }
 }

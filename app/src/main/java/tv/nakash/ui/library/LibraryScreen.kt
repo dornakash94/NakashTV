@@ -39,6 +39,8 @@ class LibraryViewModel @Inject constructor(val catalog: CatalogRepository, val u
         val rows = runCatching { recs.discoverRows(profiles.current.value?.id, series) }.getOrDefault(emptyList())
         _smart.value = _smart.value + (series to rows)
     } }
+    fun rowSeen(row: String) = recs.rowSeen(row)
+    fun rowOpened(row: String) = recs.rowOpened(row)
     val movies = catalog.newestMovies(Int.MAX_VALUE).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val series = catalog.recentlyUpdatedSeries(Int.MAX_VALUE).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val channels = catalog.channels().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

@@ -15,3 +15,5 @@ CREATE INDEX IF NOT EXISTS items_since ON items (account, synced_at);
 CREATE INDEX IF NOT EXISTS profiles_since ON profiles (account, synced_at);
 -- The latest app release per channel ("stable" for everyone, "debug" for testing), shown by the in-app update prompt.
 CREATE TABLE IF NOT EXISTS app_release (channel TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+-- Settings the app reads without an account ("rows": the themed rows of the Movies / Series tabs).
+CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);

@@ -50,6 +50,12 @@ class TmdbRepository @Inject constructor(okHttp: OkHttpClient, private val prefs
             ?.let { runCatching { TmdbParser.trending(it, tv) }.getOrNull() }.orEmpty() }
     }
 
+    /** The movies of a film series (TMDB collection), oldest first. */
+    suspend fun collection(id: Int): List<tv.nakash.domain.TmdbTitle> = withContext(Dispatchers.IO) {
+        val key = prefs.key.value ?: return@withContext emptyList()
+        get(url("collection/$id", key))?.let { runCatching { TmdbParser.collectionParts(it) }.getOrNull() }.orEmpty()
+    }
+
     /** True when TMDB accepts the key. */
     suspend fun validate(key: String): Boolean = withContext(Dispatchers.IO) {
         runCatching { client.newCall(Request.Builder().url(url("configuration", key)).build()).execute().use { it.isSuccessful } }.getOrDefault(false)

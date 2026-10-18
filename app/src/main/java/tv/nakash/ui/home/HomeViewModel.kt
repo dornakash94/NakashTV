@@ -97,10 +97,13 @@ class HomeViewModel @Inject constructor(
             }
             if (continued.isNotEmpty()) add(HomeRow("continue", "המשך צפייה", items = continued))
             add(HomeRow("now", if (hasFavs) "הערוצים שלי" else "עכשיו בשידור", if (hasFavs) "המועדפים שלך · לחיצה ארוכה על ערוץ מוסיפה" else "ישראל · לחיצה ארוכה על ערוץ מוסיפה למועדפים", favs))
+            addRecs({ it == "rec_neweps" }, this)
             addRecs({ it.startsWith("rec_because") }, this)
             if (mine.isNotEmpty()) add(HomeRow("mylist", "הרשימה שלי", "סרטים וסדרות שסימנת", mine))
+            addRecs({ it.startsWith("rec_coll") }, this)
             addRecs({ it == "rec_new" }, this)
             if (movies.isNotEmpty()) add(HomeRow("new", "חדש בשירות", items = movies))
+            addRecs({ it.startsWith("rec_actor") || it.startsWith("rec_cat") }, this)
             addRecs({ it.startsWith("rec_genre") }, this)
             if (series.isNotEmpty()) add(HomeRow("eps", "פרקים חדשים", items = series))
             if (sport.isNotEmpty()) add(HomeRow("sport", "ספורט", "שידורים חיים", sport))

@@ -120,6 +120,9 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     val ctx = LocalContext.current
     fun closeCategory() { returnToShelf = selectedCategory; selectedCategory = null }
     BackHandler(selectedCategory != null) { closeCategory() }
+    // Which rows this visit scrolled to (counted once each): rows passed again and again without an open slide down.
+    val rowsSeen = remember(kind) { HashSet<String>() }
+    LaunchedEffect(focusedShelf) { focusedShelf?.let { if (rowsSeen.add(it)) vm.rowSeen(it) } }
 
     val titles by produceState(emptyList<ShelfTitle>(), movies, series, kind) {
         value = withContext(Dispatchers.Default) {
@@ -148,7 +151,9 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                 val mine = favorites.filter { it.kind == (if (seriesMode) "series" else "movie") }.sortedByDescending { it.addedAt }.mapNotNull { indexed[it.refId.toIntOrNull()] }
                 if (mine.isNotEmpty()) add(Shelf("mylist", "הרשימה שלי", mine.take(12)))
                 // Personal first ("כי צפית ב…", "מותאם בשבילך", the profile's genres), then new, trending, top rated and the themes.
-                fun smartShelf(r: tv.nakash.data.repo.IdRow) = r.ids.mapNotNull { indexed[it] }.take(20).takeIf { it.size >= 4 }?.let { add(Shelf(r.key, r.title, it)) }
+                // New episodes and the rest of a film series are worth a row even with one or two titles.
+                fun smartShelf(r: tv.nakash.data.repo.IdRow) = r.ids.mapNotNull { indexed[it] }.take(20)
+                    .takeIf { it.size >= (if (r.key == "p_neweps" || r.key.startsWith("p_coll")) 1 else 4) }?.let { add(Shelf(r.key, r.title, it)) }
                 smart.filter { it.key.startsWith("because") || it.key.startsWith("p_") }.forEach(::smartShelf)
                 if (titles.isNotEmpty()) add(Shelf("new", if (seriesMode) "פרקים חדשים" else "חדש בשירות", titles.take(12)))
                 smart.filter { it.key == "trend" }.forEach(::smartShelf)
@@ -265,7 +270,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
         returnToShelf = null
     }
     LaunchedEffect(kind) { if (if (seriesMode) vm.series.value.isEmpty() else vm.movies.value.isEmpty()) vm.refresh(seriesMode) }
-    fun open(item: ShelfTitle) { nav.navigate(if (seriesMode) "seriesDetail/${item.id}" else "movie/${item.id}") }
+    fun open(item: ShelfTitle) { focusedShelf?.let(vm::rowOpened); nav.navigate(if (seriesMode) "seriesDetail/${item.id}" else "movie/${item.id}") }
     fun playNow(item: ShelfTitle) { scope.launch { if (vm.playTitle(item.id, seriesMode)) nav.navigate("player") else open(item) } }
 
     Box(Modifier.fillMaxSize().background(NakashColors.Bg)) {

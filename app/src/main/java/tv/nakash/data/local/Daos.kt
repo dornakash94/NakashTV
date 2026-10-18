@@ -52,8 +52,8 @@ interface VodDao {
     @Query("SELECT id, title, year, poster, `cast`, director, genres FROM movies ORDER BY added DESC") fun searchMovies(): Flow<List<MovieSearchRow>>
     @Query("SELECT id, title, year, cover, `cast`, genres FROM series ORDER BY lastModified DESC") fun searchSeries(): Flow<List<SeriesSearchRow>>
     // Recommendations: only the fields they score on (no plots/cast), and the chosen titles by id.
-    @Query("SELECT id, title, year, genres, rating, backdrop, tmdbId, runtimeMin FROM movies ORDER BY added DESC") suspend fun movieLite(): List<MovieLite>
-    @Query("SELECT id, title, year, genres, rating, backdrop FROM series ORDER BY lastModified DESC") suspend fun seriesLite(): List<SeriesLite>
+    @Query("SELECT id, title, year, genres, rating, backdrop, tmdbId, runtimeMin, categoryIds, `cast` FROM movies ORDER BY added DESC") suspend fun movieLite(): List<MovieLite>
+    @Query("SELECT id, title, year, genres, rating, backdrop, categoryIds, `cast`, lastModified FROM series ORDER BY lastModified DESC") suspend fun seriesLite(): List<SeriesLite>
     @Query("SELECT * FROM movies WHERE id IN (:ids)") suspend fun moviesByIds(ids: List<Int>): List<MovieEntity>
     @Query("SELECT * FROM series WHERE id IN (:ids)") suspend fun seriesByIds(ids: List<Int>): List<SeriesEntity>
     @Query("SELECT * FROM movies WHERE rating >= 7 AND year >= :minYear ORDER BY rating DESC LIMIT 40") fun topRated(minYear: Int): Flow<List<MovieEntity>>
@@ -104,7 +104,9 @@ interface UserDao {
     @Query("DELETE FROM favorites") suspend fun clearFavorites()
 }
 
-data class MovieLite(val id: Int, val title: String, val year: Int?, val genres: String, val rating: Double?, val backdrop: String?, val tmdbId: Int?, val runtimeMin: Int?)
-data class SeriesLite(val id: Int, val title: String, val year: Int?, val genres: String, val rating: Double?, val backdrop: String?)
+data class MovieLite(val id: Int, val title: String, val year: Int?, val genres: String, val rating: Double?, val backdrop: String?, val tmdbId: Int?, val runtimeMin: Int?,
+                     val categoryIds: String = "", val cast: String? = null)
+data class SeriesLite(val id: Int, val title: String, val year: Int?, val genres: String, val rating: Double?, val backdrop: String?,
+                      val categoryIds: String = "", val cast: String? = null, val lastModified: Long = 0)
 data class MovieSearchRow(val id: Int, val title: String, val year: Int?, val poster: String?, val cast: String?, val director: String?, val genres: String)
 data class SeriesSearchRow(val id: Int, val title: String, val year: Int?, val cover: String?, val cast: String?, val genres: String)
