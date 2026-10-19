@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import tv.nakash.data.local.ChannelEntity
@@ -52,7 +53,8 @@ class HomeViewModel @Inject constructor(
     private val recRows = MutableStateFlow<List<tv.nakash.data.repo.RecRow>>(emptyList())
     init {
         // After Home has drawn its first rows, so the personal ones never hold up the screen.
-        profiles.current.value?.id?.let { id -> viewModelScope.launch { kotlinx.coroutines.delay(1_200); recRows.value = runCatching { recs.rows(id) }.getOrDefault(emptyList()) } }
+        // Again on every new draw (back to the app after a while): a fresh mix of personal and themed rows.
+        profiles.current.value?.id?.let { id -> viewModelScope.launch { recs.generation.collectLatest { kotlinx.coroutines.delay(1_200); recRows.value = runCatching { recs.rows(id) }.getOrDefault(recRows.value) } } }
     }
 
     private val kidsPattern = Regex("ילדים|לוגי|ניק|Nick|כוכבים|הופ|לולי|בייבי|דיסני|Zoom|חינוכית")

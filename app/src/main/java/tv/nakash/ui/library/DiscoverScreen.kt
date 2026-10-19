@@ -105,7 +105,8 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     val tmdbKey by vm.tmdbPrefs.key.collectAsState()
     val smartAll by vm.smart.collectAsState()
     val smart = smartAll[seriesMode].orEmpty()
-    LaunchedEffect(seriesMode) { vm.loadSmart(seriesMode) }
+    val generation by vm.generation.collectAsState()
+    LaunchedEffect(seriesMode, generation) { vm.loadSmart(seriesMode) }
     var selectedCategory by rememberSaveable(kind) { mutableStateOf<String?>(null) }
     var focusedShelf by rememberSaveable(kind) { mutableStateOf<String?>(null) }
     // Saved with the screen, so Back from a title returns to the card (or grid tile) you left.

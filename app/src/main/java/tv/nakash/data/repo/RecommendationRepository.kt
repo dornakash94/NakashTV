@@ -60,8 +60,22 @@ class RecommendationRepository @Inject constructor(
     fun rowSeen(row: String) { profiles.current.value?.id?.let { stats.seen(it, row) } }
     fun rowOpened(row: String) { profiles.current.value?.id?.let { stats.opened(it, row) } }
 
-    /** New on every start of the app (the process), so each time the TV is turned to NakashTV the rows are a new mix. */
-    private val sessionSalt = java.util.Random().nextLong()
+    /** A new draw on every start of the app and on every return to it after a while ([refreshIfStale]). */
+    @Volatile private var sessionSalt = java.util.Random().nextLong()
+    private var drawnAt = System.currentTimeMillis()
+    /** Bumped when the rows are drawn anew: Home and the Movies / Series tabs rebuild theirs. */
+    val generation = kotlinx.coroutines.flow.MutableStateFlow(0)
+
+    /**
+     * The app is on screen again (TV turned back on, back from another app). After 30 minutes away, or when the last
+     * draw is 6 hours old, the rows get a new mix, so an app left open for days still changes.
+     */
+    fun refreshIfStale(awayMs: Long) {
+        val now = System.currentTimeMillis()
+        if (awayMs < 30 * 60_000L && now - drawnAt < 6 * 60 * 60_000L) return
+        sessionSalt = java.util.Random().nextLong(); drawnAt = now; library = null
+        generation.value++
+    }
     /** Which rows show, and in what mix: a new draw on each app start and every 6 hours, stable while browsing; per profile. */
     private fun slotSeed(profileId: String?): Long {
         val now = java.time.LocalDateTime.now()

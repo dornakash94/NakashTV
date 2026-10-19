@@ -20,7 +20,9 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var updater: tv.nakash.data.update.AppUpdater
     @Inject lateinit var playback: tv.nakash.player.PlayerController
     @Inject lateinit var preview: tv.nakash.player.PreviewPlayer
+    @Inject lateinit var recs: tv.nakash.data.repo.RecommendationRepository
     private var stopped = false
+    private var stoppedAt = 0L
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         // Settings is learning a remote button: it gets every key first, before focus, dialogs or the media session.
         tv.nakash.data.local.KeyCapture.onKey?.let { listener ->
@@ -43,7 +45,7 @@ class MainActivity : ComponentActivity() {
     /** Leaving the app (home button, another input): stop every video, free the trailer renderer and decoded images. */
     override fun onStop() {
         super.onStop()
-        stopped = true
+        stopped = true; stoppedAt = System.currentTimeMillis()
         playback.background(); preview.background()
         profileSync.syncOnLeave(this)
         tv.nakash.ui.components.TrailerPlayer.release()
@@ -55,6 +57,7 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         if (!stopped) return
         stopped = false
+        recs.refreshIfStale(System.currentTimeMillis() - stoppedAt)
         playback.surfaceEpoch.value++
         playback.foreground(); preview.foreground()
     }

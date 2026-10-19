@@ -35,7 +35,14 @@ class LibraryViewModel @Inject constructor(val catalog: CatalogRepository, val u
     private val _smart = MutableStateFlow<Map<Boolean, List<tv.nakash.data.repo.IdRow>>>(emptyMap())
     /** Personal + curated rows of the Movies (false) / Series (true) tab, computed once per visit of the screen. */
     val smart: kotlinx.coroutines.flow.StateFlow<Map<Boolean, List<tv.nakash.data.repo.IdRow>>> = _smart
-    fun loadSmart(series: Boolean) { if (series !in _smart.value) viewModelScope.launch {
+    /** A new draw of the rows (back to the app after a while): the tabs rebuild theirs. */
+    val generation = recs.generation
+    private var drawn = recs.generation.value
+    fun loadSmart(series: Boolean) {
+        // The old rows stay on screen until the new mix is ready (no blank flash).
+        val stale = drawn != recs.generation.value
+        if (stale) { drawn = recs.generation.value; _smart.value = _smart.value.filterKeys { it == series } }
+        if (stale || series !in _smart.value) viewModelScope.launch {
         val rows = runCatching { recs.discoverRows(profiles.current.value?.id, series) }.getOrDefault(emptyList())
         _smart.value = _smart.value + (series to rows)
     } }
