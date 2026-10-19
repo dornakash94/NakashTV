@@ -86,10 +86,10 @@ class HomeViewModel @Inject constructor(
         val (sport, kids, docs) = themedRows
         buildList {
             val seenSeries=mutableSetOf<Int>()
-            var hasChannel=false
             val continued=cont.mapNotNull { p ->
                 when(p.kind) {
-                    "channel" -> if(hasChannel) null else catalog.channel(p.refId.toInt())?.let { hasChannel=true;ContinueItem(p,it.displayName,it.logo,it) }
+                    // Channels are not "continue watching": the last ones sit in "הערוצים שלי" / the live tab.
+                    "channel" -> null
                     "movie" -> catalog.movie(p.refId.toInt()).first()?.let { ContinueItem(p,it.title,it.backdrop ?: it.poster,it) }
                     "episode" -> p.seriesId?.takeIf { seenSeries.add(it) }?.let { catalog.series(it).first() }?.let { ContinueItem(p,it.title,it.backdrop ?: it.cover,it) }
                     else -> null
@@ -105,6 +105,7 @@ class HomeViewModel @Inject constructor(
             if (movies.isNotEmpty()) add(HomeRow("new", "חדש בשירות", items = movies))
             addRecs({ it.startsWith("rec_actor") || it.startsWith("rec_cat") }, this)
             addRecs({ it.startsWith("rec_genre") }, this)
+            addRecs({ it.startsWith("rec_theme") }, this)
             if (series.isNotEmpty()) add(HomeRow("eps", "פרקים חדשים", items = series))
             if (sport.isNotEmpty()) add(HomeRow("sport", "ספורט", "שידורים חיים", sport))
             if (kids.isNotEmpty()) add(HomeRow("kids", "ילדים", items = kids))

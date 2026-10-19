@@ -116,4 +116,24 @@ class RecommenderTest {
         assertThat(rows.single().key).isEqualTo("c_turkish")
         assertThat(rows.single().ids.toSet()).isEqualTo((1..7).toSet())
     }
+
+    @Test fun theRowLineupChangesBetweenSlotsButNotWithinOne() {
+        val rows = (1..30).toList()
+        val a = Recommender.pickWeighted(rows, 9, 100L) { 1.0 }
+        assertThat(a).hasSize(9)
+        assertThat(Recommender.pickWeighted(rows, 9, 100L) { 1.0 }).isEqualTo(a)
+        val lineups = (101L..110L).map { Recommender.pickWeighted(rows, 9, it) { 1.0 } }.toSet()
+        assertThat(lineups.size).isGreaterThan(5)
+        // A row the profile likes comes up far more often than one it keeps passing.
+        val liked = (1L..400L).count { 1 in Recommender.pickWeighted(rows, 9, it) { r -> if (r == 1) Recommender.themeWeight(1.0, 2 to 2) else if (r == 2) Recommender.themeWeight(0.0, 20 to 0) else 1.0 } }
+        val passed = (1L..400L).count { 2 in Recommender.pickWeighted(rows, 9, it) { r -> if (r == 1) Recommender.themeWeight(1.0, 2 to 2) else if (r == 2) Recommender.themeWeight(0.0, 20 to 0) else 1.0 } }
+        assertThat(liked).isGreaterThan(passed * 3)
+    }
+
+    @Test fun personalPicksKeepTheTopAndRotateTheRest() {
+        val ranked = listOf("a", "b", "c", "d", "e", "f")
+        val picks = (1L..20L).map { Recommender.rotate(ranked, 2, it) }
+        assertThat(picks.all { it.first() == "a" && it.size == 2 }).isTrue()
+        assertThat(picks.map { it[1] }.toSet().size).isGreaterThan(2)
+    }
 }

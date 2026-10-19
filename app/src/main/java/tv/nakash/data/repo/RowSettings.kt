@@ -56,7 +56,7 @@ class RowConfig @Inject constructor(okHttp: OkHttpClient, @ApplicationContext ct
 @Singleton
 class RowStats @Inject constructor(@ApplicationContext ctx: Context) {
     private val prefs = ctx.getSharedPreferences("row_stats", Context.MODE_PRIVATE)
-    private fun get(profile: String, row: String): Pair<Int, Int> =
+    fun get(profile: String, row: String): Pair<Int, Int> =
         prefs.getString("$profile|$row", null)?.split(':')?.let { (it.getOrNull(0)?.toIntOrNull() ?: 0) to (it.getOrNull(1)?.toIntOrNull() ?: 0) } ?: (0 to 0)
     private fun put(profile: String, row: String, v: Pair<Int, Int>) = prefs.edit().putString("$profile|$row", "${v.first}:${v.second}").apply()
 

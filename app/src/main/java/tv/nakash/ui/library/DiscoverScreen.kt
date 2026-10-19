@@ -143,6 +143,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
             }
         }
     }
+    val ratedSeed = rememberSaveable(kind) { java.util.Random().nextLong() }
     val shelves by produceState(emptyList<Shelf>(), titles, categories, continued, favorites, smart) {
         value = withContext(Dispatchers.Default) {
             buildList {
@@ -157,7 +158,8 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                 smart.filter { it.key.startsWith("because") || it.key.startsWith("p_") }.forEach(::smartShelf)
                 if (titles.isNotEmpty()) add(Shelf("new", if (seriesMode) "פרקים חדשים" else "חדש בשירות", titles.take(12)))
                 smart.filter { it.key == "trend" }.forEach(::smartShelf)
-                val rated = titles.filter { (it.rating ?: 0.0) >= 7.0 }.sortedByDescending { it.rating }.take(12)
+                // A different dozen of the 60 best rated on each visit.
+                val rated = titles.filter { (it.rating ?: 0.0) >= 7.0 }.sortedByDescending { it.rating }.take(60).shuffled(java.util.Random(ratedSeed)).take(12)
                 if (rated.isNotEmpty()) add(Shelf("rated", "שווה לראות", rated))
                 smart.filter { it.key.startsWith("c_") }.forEach(::smartShelf)
                 // One pass over the titles (each title's category list split once), not one pass per category.
