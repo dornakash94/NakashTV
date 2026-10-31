@@ -2,6 +2,7 @@ package tv.nakash.data.remote
 
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
@@ -84,6 +85,30 @@ object LenientStringList : KSerializer<List<String>> {
     }
     override fun serialize(encoder: Encoder, value: List<String>) = encoder.encodeString(value.joinToString(","))
 }
+
+/** A nested object that sometimes arrives as "" or [] (episode info on some series) -> null instead of failing the whole response. */
+open class LenientObject<T : Any>(private val inner: KSerializer<T>) : KSerializer<T?> {
+    override val descriptor: SerialDescriptor = inner.descriptor
+    override fun deserialize(decoder: Decoder): T? {
+        val d = decoder as JsonDecoder
+        return (d.decodeJsonElement() as? JsonObject)?.let { d.json.decodeFromJsonElement(inner, it) }
+    }
+    override fun serialize(encoder: Encoder, value: T?) { if (value != null) encoder.encodeSerializableValue(inner, value) else encoder.encodeString("") }
+}
+
+/** Episodes keyed by season; a series with none sends [] instead of {}. */
+object LenientEpisodeMap : KSerializer<Map<String, List<EpisodeDto>>> {
+    private val inner = kotlinx.serialization.builtins.MapSerializer(String.serializer(), kotlinx.serialization.builtins.ListSerializer(EpisodeDto.serializer()))
+    override val descriptor: SerialDescriptor = inner.descriptor
+    override fun deserialize(decoder: Decoder): Map<String, List<EpisodeDto>> {
+        val d = decoder as JsonDecoder
+        return (d.decodeJsonElement() as? JsonObject)?.let { d.json.decodeFromJsonElement(inner, it) }.orEmpty()
+    }
+    override fun serialize(encoder: Encoder, value: Map<String, List<EpisodeDto>>) = encoder.encodeSerializableValue(inner, value)
+}
+
+object LenientEpisodeInfo : LenientObject<EpisodeInfoDto>(EpisodeInfoDto.serializer())
+object LenientSeriesDetails : LenientObject<SeriesDetailsDto>(SeriesDetailsDto.serializer())
 
 @Serializable
 data class AuthResponse(
@@ -225,9 +250,9 @@ data class SeriesDetailsDto(
 @Serializable
 data class SeriesInfoResponse(
     val seasons: List<SeasonDto> = emptyList(),
-    val info: SeriesDetailsDto? = null,
+    @Serializable(LenientSeriesDetails::class) val info: SeriesDetailsDto? = null,
     /** Keyed by season number as a string ("1", "2"...). Do not rely on key order. */
-    val episodes: Map<String, List<EpisodeDto>> = emptyMap(),
+    @Serializable(LenientEpisodeMap::class) val episodes: Map<String, List<EpisodeDto>> = emptyMap(),
 )
 
 @Serializable
@@ -247,7 +272,7 @@ data class EpisodeDto(
     val title: String,
     @SerialName("container_extension") @Serializable(LenientString::class) val containerExtension: String? = "mp4",
     @Serializable(LenientInt::class) val season: Int? = null,
-    val info: EpisodeInfoDto? = null,
+    @Serializable(LenientEpisodeInfo::class) val info: EpisodeInfoDto? = null,
     @Serializable(LenientLong::class) val added: Long? = null,
 )
 

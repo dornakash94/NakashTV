@@ -55,6 +55,14 @@ class DtoParsingTest {
         assertThat(r.episodes["1"]!!.first().info!!.durationSecs).isEqualTo(2761)
     }
 
+    @Test fun `series info tolerates empty info and empty episodes`() {
+        // הישרדות (176): one episode sends "info":"" and must not fail the whole series.
+        val r = json.decodeFromString<SeriesInfoResponse>("""{"seasons":[],"info":[],"episodes":{"6":[{"id":"1","episode_num":"4","title":"פרק 4","container_extension":"mp4","info":"","season":6}]}}""")
+        assertThat(r.info).isNull()
+        assertThat(r.episodes["6"]!!.single().info).isNull()
+        assertThat(json.decodeFromString<SeriesInfoResponse>("""{"seasons":[],"episodes":[]}""").episodes).isEmpty()
+    }
+
     @Test fun `short epg parses timestamps as long`() {
         val r = json.decodeFromString<ShortEpgResponse>(fixture("short_epg_kan11.json"))
         assertThat(r.listings.first().startTs).isEqualTo(1789714800L)

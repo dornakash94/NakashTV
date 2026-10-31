@@ -85,6 +85,8 @@ class PlayerController @Inject constructor(
     private var stallJob: Job? = null
     private var progressJob: Job? = null
     private var m3u8Failures = 0
+    // Decoders that failed on the current title; skipped when the player retries it (see handleError).
+    private val failedDecoders = mutableSetOf<String>()
     private var chunkStartedAt = 0L
     /** Broadcast time when the current catch-up chunk was requested: the provider serves recorded minutes only up to it. */
     private var chunkRequestedAt = 0L
@@ -129,7 +131,12 @@ class PlayerController @Inject constructor(
             .setBufferDurationsMs(30_000, 30_000, 750, 1_500)
             .setPrioritizeTimeOverSizeThresholds(true).build()
         // Decoder fallback: if the TV's first decoder for a format fails to start, try the next one instead of an error.
-        val renderers = androidx.media3.exoplayer.DefaultRenderersFactory(ctx).setEnableDecoderFallback(true)
+        // A decoder that starts but then fails on a file (some H.264 headers the TV's or emulator's decoder rejects)
+        // is skipped on retry, so the next one, often the software decoder, plays it.
+        val selector = androidx.media3.exoplayer.mediacodec.MediaCodecSelector { mime, secure, tunneling ->
+            androidx.media3.exoplayer.mediacodec.MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling).filterNot { it.name in failedDecoders }
+        }
+        val renderers = androidx.media3.exoplayer.DefaultRenderersFactory(ctx).setEnableDecoderFallback(true).setMediaCodecSelector(selector)
         return ExoPlayer.Builder(ctx, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dsf))
             .setLoadControl(loadControl)
@@ -179,7 +186,7 @@ class PlayerController @Inject constructor(
 
     // ---------- public API ----------
     fun play(req: PlayRequest) {
-        _ended.value=0L; recoveries=0; resumeOnReturn=null
+        _ended.value=0L; recoveries=0; resumeOnReturn=null; failedDecoders.clear()
         // One video at a time: the card preview and the trailer web renderer give their decoders and memory back.
         videoFrameRate.value = 0f
         preview.stop(); tv.nakash.ui.components.TrailerPlayer.release(); saveNow(); stopProgress(); stallJob?.cancel(); playJob?.cancel(); m3u8Failures = 0
@@ -337,6 +344,11 @@ class PlayerController @Inject constructor(
 
     private fun handleError(e: PlaybackException) {
         val st = _state.value
+        val decoder = generateSequence<Throwable>(e) { it.cause }.take(12).filterIsInstance<androidx.media3.exoplayer.mediacodec.MediaCodecDecoderException>().firstOrNull()?.codecInfo?.name
+        if (e.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED && decoder != null && failedDecoders.add(decoder)) {
+            android.util.Log.w("NakashPlayback", "decoder $decoder failed, retrying with the next one")
+            player.prepare(); return
+        }
         if (!st.isLive) {
             val blockedHttp=generateSequence<Throwable>(e) {it.cause}.take(12).any {it.message?.contains("CLEARTEXT",ignoreCase=true)==true}
             _state.update { it.copy(isBuffering=false,error = if(blockedHttp) "שרת השידור דורש אישור לחיבור HTTP. הצפייה תתחיל לאחר אישור והתקנת העדכון." else when(e.errorCode) {

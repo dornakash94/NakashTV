@@ -169,6 +169,8 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
         busy=series && chosen==null
         val ok=runCatching {kotlinx.coroutines.withTimeoutOrNull(12_000) {if(series) vm.catalog.ensureSeriesDetail(id,attempt>0) else vm.catalog.ensureMovieInfo(id)}}
         runCatching {refreshResume()}
+        ok.exceptionOrNull()?.let {android.util.Log.w("NakashDetail","detail $id failed ${it.javaClass.simpleName}: ${it.message}")}
+        if(ok.isSuccess && ok.getOrNull()==null) android.util.Log.w("NakashDetail","detail $id timed out")
         if(series && chosen==null && (ok.isFailure || ok.getOrNull()==null)) error="לא הצלחנו לטעון את התוכן. אפשר לנסות שוב."
         busy=false
     }
