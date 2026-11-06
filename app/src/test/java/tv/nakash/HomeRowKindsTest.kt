@@ -93,4 +93,29 @@ class HomeRowKindsTest {
         assertThat(Recommender.mainKind(Recommender.History(listOf(watched(1), ep), emptyList()), now)).isNull()
         assertThat(m).hasSize(5)
     }
+
+    private fun directed(id: Int, d: String?, rating: Double = 7.0) = MovieLite(id, "m$id", 2015, "דרמה", rating, null, null, 110, "", null, d)
+
+    @Test fun moreFromADirectorTheProfileFollows() {
+        val m = listOf(directed(1, "Christopher Nolan"), directed(2, "Christopher Nolan, Emma Thomas"), directed(3, "Christopher Nolan", 8.5),
+            directed(4, "Denis Villeneuve"), directed(5, "Denis Villeneuve"), directed(6, null))
+        val h = Recommender.History(listOf(watched(1), watched(2), watched(4)), emptyList())
+        assertThat(Recommender.topDirectors(h, m, now)).containsExactly("Christopher Nolan")      // Villeneuve: one movie only
+        assertThat(ids(Recommender.byDirector("Christopher Nolan", m, h.seenKeys()))).containsExactly(3)
+    }
+
+    @Test fun theTimeOfYearChoosesTheSeasonalRow() {
+        fun key(m: Int, d: Int) = Recommender.seasonal(java.time.LocalDate.of(2026, m, d)).key
+        assertThat(key(12, 20)).isEqualTo("holidays")
+        assertThat(key(1, 1)).isEqualTo("holidays")
+        assertThat(key(1, 10)).isEqualTo("winter")
+        assertThat(key(2, 10)).isEqualTo("love")
+        assertThat(key(10, 25)).isEqualTo("halloween")
+        assertThat(key(7, 15)).isEqualTo("summer")
+        assertThat(key(4, 1)).isEqualTo("spring")
+        assertThat(key(9, 20)).isEqualTo("autumn")
+        val m = listOf(MovieLite(1, "Home Alone: Christmas", 1990, "קומדיה", 5.5, null, null, 100), movie(2, "משפחה", rating = 7.5), movie(3, "אימה", rating = 8.0))
+        assertThat(ids(Recommender.bySeason(Recommender.seasonal(java.time.LocalDate.of(2026, 12, 20)), emptyMap(), m, emptyList(), emptySet())))
+            .containsExactly(1, 2).inOrder()                                                       // a holiday title leads, even rated low
+    }
 }

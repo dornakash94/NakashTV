@@ -98,9 +98,9 @@ class RecommendationRepository @Inject constructor(
      * The personal rows for Home. Empty for a profile with no history yet.
      *
      * Each draw (app start, back after a while, a new Home) is different: which reasons show (about 10 of a pool of
-     * 23 kinds: "כי צפית ב…" / "כי שמרת את …", a film series to finish, series left half way, what the world watches,
+     * 24 kinds, besides new episodes that always lead: "כי צפית ב…" / "כי שמרת את …", a film series to finish, series left half way, what the world watches,
      * fresh releases, its actors / category / genre / two genres together / decade, hidden gems, classics, the top
-     * rated, a genre it has not tried, a taste of every genre, one for the hour, the other kind of what it watches,
+     * rated, a genre it has not tried, a taste of every genre, one for the hour, one for the time of year, its directors, the other kind of what it watches,
      * themed rows), which titles lead each row (a draw from the top, not always the same best), and the order of
      * the rows. What the last draws showed ([ShownTitles]) is held back, so the next visit reaches for other titles.
      * Rows are still filled most-personal first, so a title shows in one row only. [record] = false: a look only
@@ -172,6 +172,11 @@ class RecommendationRepository @Inject constructor(
                     addK("rec_actor_0", "עוד עם $actor", "שחקן שאתה צופה בו הרבה", Recommender.byActor(actor, lib.movies, lib.series, seen), min = 4, topic = "t:actor:$actor")
                 }
             },
+            Kind("director", 1.5) {
+                topics("director", Recommender.topDirectors(h, lib.movies), 1).forEach { d ->
+                    addK("rec_director", "עוד מהבמאי $d", "במאי שאתה חוזר אליו", Recommender.byDirector(d, lib.movies, seen), min = 3, topic = "t:director:$d")
+                }
+            },
             Kind("stars", 1.2) { addK("rec_stars", "השחקנים שחוזרים אצלך", "כמה מהם יחד, באותו כותר", Recommender.byActors(Recommender.topActors(h, lib.movies, lib.series).take(8), lib.movies, lib.series, seen)) },
             Kind("cat", 1.5) {
                 topics("cat", Recommender.topCategories(h, lib.movies, lib.series).filter { (lib.seriesCats[it] ?: lib.movieCats[it])?.let(Recommender::tasteCategory) == true }, 1).forEach { cat ->
@@ -212,6 +217,10 @@ class RecommendationRepository @Inject constructor(
                     Recommender.Mood.BINGE -> "סדרות לבינג׳" to "מדורגות גבוה, בז׳אנרים שלך"
                 }
                 addK("rec_mood", title, sub, Recommender.forMood(mood, affinity, lib.movies, lib.series, seen))
+            },
+            Kind("season", 1.3) {
+                val sz = Recommender.seasonal(now.toLocalDate())
+                addK("rec_season", sz.title, sz.subtitle, Recommender.bySeason(sz, affinity, lib.movies, lib.series, seen), topic = "t:season:${sz.key}")
             },
             Kind("cross", 1.0) {
                 val main = Recommender.mainKind(h)
@@ -808,6 +817,50 @@ object Recommender {
         val total = w.values.sum().takeIf { it > 0 } ?: return null
         val movies = w.filterKeys { it[0] == 'm' }.values.sum() / total
         return when { movies >= .7 -> 'm'; movies <= .3 -> 's'; else -> null }
+    }
+
+    internal fun directorsOf(d: String?) = d.orEmpty().split(',').map { it.trim() }.filter { it.length > 2 }.take(2)
+
+    /** Directors the profile follows: in two watched movies or more, or in one it loved. Best first. */
+    fun topDirectors(h: History, movies: List<MovieLite>, now: Long = System.currentTimeMillis()): List<String> {
+        val movieById = movies.associateBy { it.id }
+        val score = HashMap<String, Double>(); val titles = HashMap<String, Int>(); val loved = HashSet<String>()
+        val lovedTitles = h.ratings.filter { it.value >= 2 }.map { "${it.kind[0]}${it.refId}" }.toSet()
+        titleWeights(h, now).forEach { (k, w) ->
+            if (w <= 0 || k[0] != 'm') return@forEach
+            directorsOf(k.drop(1).toIntOrNull()?.let { movieById[it] }?.director).forEach { d ->
+                score[d] = (score[d] ?: 0.0) + w; titles[d] = (titles[d] ?: 0) + 1; if (k in lovedTitles) loved += d
+            }
+        }
+        return score.filterKeys { (titles[it] ?: 0) >= 2 || it in loved }.entries.sortedByDescending { it.value }.map { it.key }
+    }
+
+    /** The unseen movies of a [director], best first. */
+    fun byDirector(director: String, movies: List<MovieLite>, seen: Set<String>, limit: Int = 30): List<Pair<Char, Int>> =
+        movies.filter { "movie:${it.id}" !in seen && director in directorsOf(it.director) }.sortedByDescending { quality(it.rating, it.year) }.take(limit).map { 'm' to it.id }
+
+    /** A row for the time of year: its title, why, the genres it draws on, and words a title may hold. */
+    data class Seasonal(val key: String, val title: String, val subtitle: String, val genres: Set<String>, val words: Regex? = null)
+    fun seasonal(date: java.time.LocalDate): Seasonal {
+        val md = date.monthValue * 100 + date.dayOfMonth
+        return when {
+            md in 1210..1231 || md <= 102 -> Seasonal("holidays", "אווירת חג", "חנוכה, חג המולד וסוף השנה", setOf("משפחה", "אנימציה", "קומדיה", "פנטזיה"),
+                Regex("christmas|xmas|santa|holiday|hanukkah|chanukah|חנוכה|כריסמס|חג המולד|סנטה", RegexOption.IGNORE_CASE))
+            md in 207..214 -> Seasonal("love", "שבוע האהבה", "לקראת ולנטיין", setOf("רומנטי", "רומנטיקה"))
+            md in 1015..1101 -> Seasonal("halloween", "עונת הפחד", "לקראת ליל כל הקדושים", setOf("אימה"), Regex("halloween|ליל כל הקדושים", RegexOption.IGNORE_CASE))
+            date.monthValue in 7..8 -> Seasonal("summer", "חופש גדול בבית", "הרפתקאות וצחוק לימי הקיץ", setOf("הרפתקאות", "קומדיה", "משפחה", "אנימציה", "אקשן והרפתקאות"))
+            date.monthValue == 12 || date.monthValue in 1..2 -> Seasonal("winter", "ערב חורף מתחת לשמיכה", "דרמות ורומנטיקה לערבים קרים", setOf("דרמה", "רומנטי", "רומנטיקה"))
+            date.monthValue in 3..5 -> Seasonal("spring", "חופשת אביב", "קלילים, למשפחה ולחברים", setOf("קומדיה", "משפחה", "אנימציה", "מוזיקה"))
+            else -> Seasonal("autumn", "ערבי סתיו", "מתח ותעלומות לערבים שמתקצרים", setOf("מותחן", "מתח", "מסתורין", "מיסתורין", "פשע"))
+        }
+    }
+    /** Titles for [s]: ones whose name fits its words first, then its genres (rated 6.5+), genre fit first. */
+    fun bySeason(s: Seasonal, affinity: Map<String, Double>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, limit: Int = 40): List<Pair<Char, Int>> {
+        fun named(t: String) = s.words?.containsMatchIn(t) == true
+        fun ok(t: String, g: String, r: Double?) = named(t) || ((r ?: 0.0) >= 6.5 && genres(g).any { it in s.genres })
+        return mixed(movies, series, seen, limit, { ok(it.title, it.genres, it.rating) }, { ok(it.title, it.genres, it.rating) },
+            { (if (named(it.title)) 100.0 else 0.0) + fit(it.genres, it.rating, it.year, affinity) },
+            { (if (named(it.title)) 100.0 else 0.0) + fit(it.genres, it.rating, it.year, affinity) })
     }
 
     fun <T> interleave(a: List<T>, b: List<T>): List<T> = buildList {
