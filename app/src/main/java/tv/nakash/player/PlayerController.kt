@@ -31,6 +31,13 @@ import tv.nakash.domain.PlaybackPolicy
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** Player errors that mean the decoder, not the stream: worth trying the device's next decoder. */
+private val DECODER_ERRORS = setOf(
+    PlaybackException.ERROR_CODE_DECODER_INIT_FAILED, PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+    PlaybackException.ERROR_CODE_DECODING_FAILED, PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+    PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+)
+
 sealed interface PlayRequest {
     data class Live(val channel: ChannelEntity, val sourceIndex: Int = 0) : PlayRequest
     data class Archive(val channel: ChannelEntity, val program: EpgEntity, val offsetSeconds:Long = 0) : PlayRequest
@@ -69,6 +76,7 @@ class PlayerController @Inject constructor(
     private val preview: PreviewPlayer,
     private val profileSync: tv.nakash.data.profile.ProfileSync,
     private val playbackPrefs: tv.nakash.data.local.PlaybackPreferences,
+    private val diagnostics: tv.nakash.data.diag.Diagnostics,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(PlayerUiState())
@@ -87,6 +95,8 @@ class PlayerController @Inject constructor(
     private var m3u8Failures = 0
     // Decoders that failed on the current title; skipped when the player retries it (see handleError).
     private val failedDecoders = mutableSetOf<String>()
+    /** The video decoder in use right now (null when none is). */
+    @Volatile private var videoDecoder: String? = null
     private var chunkStartedAt = 0L
     /** Broadcast time when the current catch-up chunk was requested: the provider serves recorded minutes only up to it. */
     private var chunkRequestedAt = 0L
@@ -146,6 +156,10 @@ class PlayerController @Inject constructor(
                 // Resume and seeks land on the nearest keyframe: no downloading and decoding up to a whole GOP
                 // (several seconds of video on IPTV streams) before the first picture.
                 p.setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
+                p.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+                    override fun onVideoDecoderInitialized(t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { videoDecoder = decoderName }
+                    override fun onVideoDisabled(t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, counters: androidx.media3.exoplayer.DecoderCounters) { videoDecoder = null }
+                })
                 p.addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         _state.update { it.copy(isPlaying = isPlaying) }
@@ -335,8 +349,18 @@ class PlayerController @Inject constructor(
             delay(if(_state.value.isLive) 10_000 else 25_000)
             if(player.playbackState == Player.STATE_BUFFERING) {
                 if(_state.value.isLive) failover("timeout") else {
+                    // Seconds of video already downloaded but nothing shown: the decoder is stuck or too slow (a software
+                    // HEVC decoder on a weak box), not the provider. Try the next decoder from the same spot first.
+                    val decoderStuck = player.totalBufferedDuration > 5_000
+                    val dec = videoDecoder
+                    report(IllegalStateException(if (decoderStuck) "buffered ${player.totalBufferedDuration / 1000}s but no frames for 25 s" else "no data from the provider for 25 s"), dec, if (decoderStuck) "DECODER_STALL" else "STALL_TIMEOUT")
+                    if (decoderStuck && dec != null && failedDecoders.add(dec)) {
+                        android.util.Log.w("NakashPlayback", "decoder $dec stalled with a full buffer, retrying with the next one")
+                        val pos = player.currentPosition; player.stop(); player.seekTo(pos); player.prepare(); player.playWhenReady = true
+                        return@launch
+                    }
                     player.stop()
-                    _state.update { it.copy(isBuffering=false,error="הספק לא מגיב כרגע. אפשר לנסות שוב.") }
+                    _state.update { it.copy(isBuffering=false,error = if (decoderStuck) "${cantDecode()}\n(קוד DECODER_STALL)" else "הספק לא מגיב כרגע. אפשר לנסות שוב.\n(קוד STALL)") }
                 }
             }
         }
@@ -344,19 +368,27 @@ class PlayerController @Inject constructor(
 
     private fun handleError(e: PlaybackException) {
         val st = _state.value
-        val decoder = generateSequence<Throwable>(e) { it.cause }.take(12).filterIsInstance<androidx.media3.exoplayer.mediacodec.MediaCodecDecoderException>().firstOrNull()?.codecInfo?.name
-        if (e.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED && decoder != null && failedDecoders.add(decoder)) {
+        val chain = generateSequence<Throwable>(e) { it.cause }.take(12).toList()
+        val decoder = chain.filterIsInstance<androidx.media3.exoplayer.mediacodec.MediaCodecDecoderException>().firstOrNull()?.codecInfo?.name
+            ?: chain.filterIsInstance<androidx.media3.exoplayer.mediacodec.MediaCodecRenderer.DecoderInitializationException>().firstOrNull()?.codecInfo?.name
+            ?: videoDecoder?.takeIf { e.errorCode in DECODER_ERRORS }
+        android.util.Log.w("NakashPlayback", "error ${e.errorCodeName} decoder=$decoder", e)
+        report(e, decoder)
+        // Any decoder failure (it would not start, does not take this format, or failed mid-file): the next decoder
+        // on the device gets the title, often the software one.
+        if (e.errorCode in DECODER_ERRORS && decoder != null && failedDecoders.add(decoder)) {
             android.util.Log.w("NakashPlayback", "decoder $decoder failed, retrying with the next one")
             player.prepare(); return
         }
         if (!st.isLive) {
             val blockedHttp=generateSequence<Throwable>(e) {it.cause}.take(12).any {it.message?.contains("CLEARTEXT",ignoreCase=true)==true}
-            _state.update { it.copy(isBuffering=false,error = if(blockedHttp) "שרת השידור דורש אישור לחיבור HTTP. הצפייה תתחיל לאחר אישור והתקנת העדכון." else when(e.errorCode) {
+            // The code under the message lets a photo of the screen tell which failure it was.
+            _state.update { it.copy(isBuffering=false,error = (if(blockedHttp) "שרת השידור דורש אישור לחיבור HTTP. הצפייה תתחיל לאחר אישור והתקנת העדכון." else when(e.errorCode) {
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "אין חיבור לשידור. בדוק את הרשת ונסה שוב."
             PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "התוכן לא זמין כרגע אצל הספק. נסה שוב בעוד רגע."
-            PlaybackException.ERROR_CODE_DECODING_FAILED -> "המכשיר לא הצליח לפענח את הווידאו הזה."
+            in DECODER_ERRORS -> cantDecode()
             else -> "לא הצלחנו להתחיל את הצפייה. אפשר לנסות שוב."
-        }) }; return }
+        }) + "\n(קוד ${e.errorCode})") }; return }
         val src = st.sources.getOrNull(st.sourceIndex)
         // m3u8 -> ts fallback for the same source before moving on
         if (src != null && !st.usedTsFallback) {
@@ -369,6 +401,35 @@ class PlayerController @Inject constructor(
             return
         }
         failover(e.errorCodeName)
+    }
+
+    /** "This device can't play this video", naming the format (HEVC is what weak boxes most often cannot). */
+    private fun cantDecode(): String {
+        val fmt = when (player.videoFormat?.sampleMimeType) {
+            androidx.media3.common.MimeTypes.VIDEO_H265 -> " (HEVC)"; androidx.media3.common.MimeTypes.VIDEO_H264 -> " (H.264)"
+            androidx.media3.common.MimeTypes.VIDEO_AV1 -> " (AV1)"; androidx.media3.common.MimeTypes.VIDEO_VP9 -> " (VP9)"; else -> ""
+        }
+        return "המכשיר לא מצליח לנגן את פורמט הווידאו של התוכן הזה$fmt."
+    }
+
+    /** Sends what failed and what was playing (the file's formats as the player saw them) to the error reports. */
+    private fun report(e: Throwable, decoder: String?, code: String = (e as? PlaybackException)?.errorCodeName ?: "UNKNOWN") {
+        val st = _state.value
+        val what: Map<String, String?> = when (val r = st.request) {
+            is PlayRequest.Episode -> mapOf("kind" to "episode", "title" to r.title, "id" to r.episodeId, "series" to "${r.seriesId}", "se" to "S${r.season}E${r.number}", "ext" to r.ext)
+            is PlayRequest.Movie -> mapOf("kind" to "movie", "title" to r.title, "id" to "${r.id}", "ext" to r.ext)
+            is PlayRequest.Live -> mapOf("kind" to "live", "title" to r.channel.displayName, "source" to "${st.sourceIndex}", "ts" to "${st.usedTsFallback}")
+            is PlayRequest.Archive -> mapOf("kind" to "archive", "title" to r.channel.displayName)
+            null -> mapOf("kind" to "none")
+        }
+        val v = player.videoFormat; val a = player.audioFormat
+        diagnostics.playback(e, code, what + mapOf(
+            "decoder" to decoder, "failedDecoders" to failedDecoders.joinToString().ifEmpty { null },
+            "video" to v?.let { "${it.sampleMimeType} ${it.codecs} ${it.width}x${it.height}" },
+            "audio" to a?.let { "${it.sampleMimeType} ${it.codecs} ch=${it.channelCount} ${it.sampleRate}" },
+            "container" to (v ?: a)?.containerMimeType, "positionMs" to "${player.currentPosition}",
+            "tunneling" to "${trackSelector.parameters.tunnelingEnabled}",
+        ))
     }
 
     private fun failover(reason: String) {

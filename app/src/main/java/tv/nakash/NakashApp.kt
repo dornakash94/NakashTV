@@ -19,8 +19,9 @@ import javax.inject.Inject
 class NakashApp : Application(), Configuration.Provider, SingletonImageLoader.Factory {
     @Inject lateinit var workerFactory: HiltWorkerFactory
     @Inject lateinit var okHttp: OkHttpClient
+    @Inject lateinit var diagnostics: tv.nakash.data.diag.Diagnostics
 
-    override fun onCreate() { super.onCreate(); SyncWorker.schedule(this) }
+    override fun onCreate() { super.onCreate(); diagnostics.install(); SyncWorker.schedule(this) }
     override val workManagerConfiguration get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
 
     /** Posters/logos go through the same OkHttp (fixed User-Agent), 512 MB disk cache. */
