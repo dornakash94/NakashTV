@@ -98,9 +98,9 @@ class RecommendationRepository @Inject constructor(
      * The personal rows for Home. Empty for a profile with no history yet.
      *
      * Each draw (app start, back after a while, a new Home) is different: which reasons show (about 10 of a pool of
-     * 24 kinds, besides new episodes that always lead: "כי צפית ב…" / "כי שמרת את …", a film series to finish, series left half way, what the world watches,
+     * 25 kinds, besides new episodes that always lead: "כי צפית ב…" / "כי שמרת את …", a film series to finish, series left half way, what the world watches,
      * fresh releases, its actors / category / genre / two genres together / decade, hidden gems, classics, the top
-     * rated, a genre it has not tried, a taste of every genre, one for the hour, one for the time of year, its directors, the other kind of what it watches,
+     * rated, a genre it has not tried, a taste of every genre, one for the hour, one for the time of year, short series (likelier near the weekend), its directors, the other kind of what it watches,
      * themed rows), which titles lead each row (a draw from the top, not always the same best), and the order of
      * the rows. What the last draws showed ([ShownTitles]) is held back, so the next visit reaches for other titles.
      * Rows are still filled most-personal first, so a title shows in one row only. [record] = false: a look only
@@ -217,6 +217,13 @@ class RecommendationRepository @Inject constructor(
                     Recommender.Mood.BINGE -> "סדרות לבינג׳" to "מדורגות גבוה, בז׳אנרים שלך"
                 }
                 addK("rec_mood", title, sub, Recommender.forMood(mood, affinity, lib.movies, lib.series, seen))
+            },
+            Kind("short", if (Recommender.weekendNear(now)) 2.5 else 1.2) {
+                val mini = if (tmdb.enabled) withTimeoutOrNull(6_000) { LibraryMatch.match(tmdb.miniseries(), lib.series, { it.title }, { it.year }).map { it.id }.toSet() }.orEmpty() else emptySet()
+                val totals = catalog.seasonTotals().associate { it.seriesId to (it.seasons to it.episodes) }
+                val weekend = Recommender.weekendNear(now)
+                addK("rec_short", if (weekend) "סדרות קצרות לסופ״ש" else "סדרות קצרות לכמה ערבים", if (weekend) "עונה אחת או מיני־סדרה, מסיימים עד מוצ״ש" else "עונה אחת או מיני־סדרה, בלי להתחייב לשנים",
+                    Recommender.shortSeries(lib.series, mini, totals, lib.seriesCats, affinity, seen))
             },
             Kind("season", 1.3) {
                 val sz = Recommender.seasonal(now.toLocalDate())
@@ -862,6 +869,27 @@ object Recommender {
             { (if (named(it.title)) 100.0 else 0.0) + fit(it.genres, it.rating, it.year, affinity) },
             { (if (named(it.title)) 100.0 else 0.0) + fit(it.genres, it.rating, it.year, affinity) })
     }
+
+    private val MINI = Regex("מיני|mini", RegexOption.IGNORE_CASE)
+
+    /**
+     * Short series, to finish in a weekend or a few evenings: TMDB miniseries the provider has ([mini]), the provider's
+     * own miniseries categories, and series known on the device ([totals]: seriesId to (seasons, episodes)) to be one
+     * season of up to 10 episodes. A series known to be longer (over 12 episodes) never counts. Rated 6.8+ (or no
+     * rating, for a known miniseries), genre fit first.
+     */
+    fun shortSeries(series: List<SeriesLite>, mini: Set<Int>, totals: Map<Int, Pair<Int, Int>>, categoryNames: Map<String, String>,
+                    affinity: Map<String, Double>, seen: Set<String>, limit: Int = 40): List<Pair<Char, Int>> =
+        series.asSequence().filter { s ->
+            val t = totals[s.id]
+            val known = t != null && t.first == 1 && t.second in 2..10
+            val tagged = s.id in mini || s.categoryIds.split(',').any { id -> categoryNames[id]?.let(MINI::containsMatchIn) == true }
+            "series:${s.id}" !in seen && (t == null || t.second <= 12) && (known || tagged) && ((s.rating ?: 0.0) >= 6.8 || (s.rating == null && tagged))
+        }.sortedByDescending { fit(it.genres, it.rating ?: 7.0, it.year, affinity) }.take(limit).map { 's' to it.id }.toList()
+
+    /** Thursday evening to Saturday: when a short series fits best. */
+    fun weekendNear(now: java.time.LocalDateTime) = now.dayOfWeek == java.time.DayOfWeek.FRIDAY || now.dayOfWeek == java.time.DayOfWeek.SATURDAY ||
+        (now.dayOfWeek == java.time.DayOfWeek.THURSDAY && now.hour >= 17)
 
     fun <T> interleave(a: List<T>, b: List<T>): List<T> = buildList {
         val n = maxOf(a.size, b.size); for (i in 0 until n) { a.getOrNull(i)?.let(::add); b.getOrNull(i)?.let(::add) }

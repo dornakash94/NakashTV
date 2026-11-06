@@ -118,4 +118,26 @@ class HomeRowKindsTest {
         assertThat(ids(Recommender.bySeason(Recommender.seasonal(java.time.LocalDate.of(2026, 12, 20)), emptyMap(), m, emptyList(), emptySet())))
             .containsExactly(1, 2).inOrder()                                                       // a holiday title leads, even rated low
     }
+
+    @Test fun shortSeriesFromTmdbTheProviderAndWhatIsKnownOnTheDevice() {
+        val s = listOf(
+            series(1, rating = 7.5),                                       // a TMDB miniseries
+            SeriesLite(2, "s2", 2020, "דרמה", 7.2, null, "40"),            // in the provider's "מיני סדרות"
+            series(3, rating = 7.8),                                       // known: 1 season of 8
+            series(4, rating = 7.8),                                       // known: 3 seasons
+            series(5, rating = 7.5),                                       // TMDB says mini, but 1 season of 24 is known here
+            series(6, rating = 6.0),                                       // TMDB mini, rated too low
+            series(7, rating = 8.0))                                       // nothing known
+        val totals = mapOf(3 to (1 to 8), 4 to (3 to 30), 5 to (1 to 24))
+        val picks = Recommender.shortSeries(s, setOf(1, 5, 6), totals, mapOf("40" to "מיני סדרות"), mapOf("דרמה" to 1.0), emptySet()).map { it.second }
+        assertThat(picks).containsExactly(1, 2, 3)
+        assertThat(Recommender.shortSeries(s, setOf(1), emptyMap(), emptyMap(), emptyMap(), setOf("series:1"))).isEmpty()
+    }
+
+    @Test fun shortSeriesLeanToTheWeekend() {
+        assertThat(Recommender.weekendNear(LocalDateTime.of(2026, 11, 5, 20, 0))).isTrue()     // Thursday evening
+        assertThat(Recommender.weekendNear(LocalDateTime.of(2026, 11, 5, 10, 0))).isFalse()    // Thursday morning
+        assertThat(Recommender.weekendNear(LocalDateTime.of(2026, 11, 7, 12, 0))).isTrue()     // Saturday
+        assertThat(Recommender.weekendNear(LocalDateTime.of(2026, 11, 8, 20, 0))).isFalse()    // Sunday
+    }
 }

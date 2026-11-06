@@ -74,6 +74,8 @@ interface VodDao {
     @Upsert suspend fun upsertSeries(list: List<SeriesEntity>)
     @Upsert suspend fun upsertSeries(s: SeriesEntity)
     @Query("SELECT * FROM seasons WHERE seriesId = :seriesId ORDER BY number") fun seasons(seriesId: Int): Flow<List<SeasonEntity>>
+    /** How long each series is, for the ones whose seasons were loaded (opened once). */
+    @Query("SELECT seriesId, COUNT(*) AS seasons, SUM(episodeCount) AS episodes FROM seasons GROUP BY seriesId") suspend fun seasonTotals(): List<SeasonTotal>
     @Query("SELECT * FROM episodes WHERE id = :id LIMIT 1") suspend fun episodeById(id:String): EpisodeEntity?
     @Query("SELECT * FROM episodes WHERE seriesId = :seriesId AND season = :season ORDER BY number") fun episodes(seriesId: Int, season: Int): Flow<List<EpisodeEntity>>
     @Query("SELECT * FROM episodes WHERE seriesId = :seriesId AND season = :season AND number = :number LIMIT 1") suspend fun episode(seriesId: Int, season: Int, number: Int): EpisodeEntity?
@@ -108,5 +110,6 @@ data class MovieLite(val id: Int, val title: String, val year: Int?, val genres:
                      val categoryIds: String = "", val cast: String? = null, val director: String? = null)
 data class SeriesLite(val id: Int, val title: String, val year: Int?, val genres: String, val rating: Double?, val backdrop: String?,
                       val categoryIds: String = "", val cast: String? = null, val lastModified: Long = 0)
+data class SeasonTotal(val seriesId: Int, val seasons: Int, val episodes: Int)
 data class MovieSearchRow(val id: Int, val title: String, val year: Int?, val poster: String?, val cast: String?, val director: String?, val genres: String)
 data class SeriesSearchRow(val id: Int, val title: String, val year: Int?, val cover: String?, val cast: String?, val genres: String)

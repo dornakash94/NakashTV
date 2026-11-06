@@ -40,6 +40,7 @@ class CatalogRepository @Inject constructor(
     fun newestMovies(limit: Int = 40) = vodDao.newest(limit)
     suspend fun movieLite() = vodDao.movieLite()
     suspend fun seriesLite() = vodDao.seriesLite()
+    suspend fun seasonTotals() = vodDao.seasonTotals()
     /** Movies / series by id, in the order of [ids]. */
     suspend fun moviesByIds(ids: List<Int>) = ids.chunked(500).flatMap { vodDao.moviesByIds(it) }.associateBy { it.id }.let { m -> ids.mapNotNull { m[it] } }
     suspend fun seriesByIds(ids: List<Int>) = ids.chunked(500).flatMap { vodDao.seriesByIds(it) }.associateBy { it.id }.let { m -> ids.mapNotNull { m[it] } }
