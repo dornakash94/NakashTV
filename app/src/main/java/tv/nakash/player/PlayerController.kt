@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import tv.nakash.data.local.ChannelEntity
 import tv.nakash.data.local.ChannelSourceEntity
@@ -36,6 +37,12 @@ private val DECODER_ERRORS = setOf(
     PlaybackException.ERROR_CODE_DECODER_INIT_FAILED, PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
     PlaybackException.ERROR_CODE_DECODING_FAILED, PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
     PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+)
+
+/** What a provider answers for an episode id it no longer has: not a video, or not found. */
+private val STALE_EPISODE = setOf(
+    PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED, PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+    PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS, PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
 )
 
 sealed interface PlayRequest {
@@ -97,6 +104,8 @@ class PlayerController @Inject constructor(
     private val failedDecoders = mutableSetOf<String>()
     /** The video decoder in use right now (null when none is). */
     @Volatile private var videoDecoder: String? = null
+    /** Episodes (series:season:number) whose list was already reloaded after a failure: once each per app run. */
+    private val staleRetried = mutableSetOf<String>()
     private var chunkStartedAt = 0L
     /** Broadcast time when the current catch-up chunk was requested: the provider serves recorded minutes only up to it. */
     private var chunkRequestedAt = 0L
@@ -380,15 +389,25 @@ class PlayerController @Inject constructor(
             android.util.Log.w("NakashPlayback", "decoder $decoder failed, retrying with the next one")
             player.prepare(); return
         }
-        if (!st.isLive) {
-            val blockedHttp=generateSequence<Throwable>(e) {it.cause}.take(12).any {it.message?.contains("CLEARTEXT",ignoreCase=true)==true}
-            // The code under the message lets a photo of the screen tell which failure it was.
-            _state.update { it.copy(isBuffering=false,error = (if(blockedHttp) "שרת השידור דורש אישור לחיבור HTTP. הצפייה תתחיל לאחר אישור והתקנת העדכון." else when(e.errorCode) {
-            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "אין חיבור לשידור. בדוק את הרשת ונסה שוב."
-            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "התוכן לא זמין כרגע אצל הספק. נסה שוב בעוד רגע."
-            in DECODER_ERRORS -> cantDecode()
-            else -> "לא הצלחנו להתחיל את הצפייה. אפשר לנסות שוב."
-        }) + "\n(קוד ${e.errorCode})") }; return }
+        // An episode the provider no longer serves under this id (it answers with something that is not a video, or
+        // 404): the series' episode list on the TV is out of date. Reload it once and play the episode now listed at
+        // the same season and number. (The father's S02E02 was re-uploaded as a new id; his TV kept the old one.)
+        val ep = st.request as? PlayRequest.Episode
+        if (ep != null && e.errorCode in STALE_EPISODE && staleRetried.add("${ep.seriesId}:${ep.season}:${ep.number}")) {
+            android.util.Log.w("NakashPlayback", "episode ${ep.episodeId} unplayable (${e.errorCodeName}), reloading series ${ep.seriesId}")
+            _state.update { it.copy(isBuffering = true, error = null) }
+            scope.launch {
+                val fresh = runCatching { withContext(Dispatchers.IO) {
+                    catalog.ensureSeriesDetail(ep.seriesId, force = true); catalog.episode(ep.seriesId, ep.season, ep.number)
+                } }.getOrNull()
+                if (fresh != null && fresh.id != ep.episodeId) {
+                    android.util.Log.w("NakashPlayback", "episode ${ep.episodeId} is now ${fresh.id}")
+                    play(ep.copy(episodeId = fresh.id, ext = fresh.containerExt))
+                } else showPlaybackError(e)
+            }
+            return
+        }
+        if (!st.isLive) { showPlaybackError(e); return }
         val src = st.sources.getOrNull(st.sourceIndex)
         // m3u8 -> ts fallback for the same source before moving on
         if (src != null && !st.usedTsFallback) {
@@ -401,6 +420,18 @@ class PlayerController @Inject constructor(
             return
         }
         failover(e.errorCodeName)
+    }
+
+    private fun showPlaybackError(e: PlaybackException) {
+        val blockedHttp=generateSequence<Throwable>(e) {it.cause}.take(12).any {it.message?.contains("CLEARTEXT",ignoreCase=true)==true}
+        // The code under the message lets a photo of the screen tell which failure it was.
+        _state.update { it.copy(isBuffering=false,error = (if(blockedHttp) "שרת השידור דורש אישור לחיבור HTTP. הצפייה תתחיל לאחר אישור והתקנת העדכון." else when(e.errorCode) {
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "אין חיבור לשידור. בדוק את הרשת ונסה שוב."
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "התוכן לא זמין כרגע אצל הספק. נסה שוב בעוד רגע."
+            in DECODER_ERRORS -> cantDecode()
+            in STALE_EPISODE -> "הספק לא מחזיר את הקובץ של התוכן הזה. אפשר לנסות שוב מאוחר יותר."
+            else -> "לא הצלחנו להתחיל את הצפייה. אפשר לנסות שוב."
+        }) + "\n(קוד ${e.errorCode})") }
     }
 
     /** "This device can't play this video", naming the format (HEVC is what weak boxes most often cannot). */

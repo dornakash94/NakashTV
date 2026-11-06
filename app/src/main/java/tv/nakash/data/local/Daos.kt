@@ -83,6 +83,17 @@ interface VodDao {
     suspend fun nextEpisode(seriesId: Int, season: Int, number: Int): EpisodeEntity?
     @Upsert suspend fun upsertSeasons(list: List<SeasonEntity>)
     @Upsert suspend fun upsertEpisodes(list: List<EpisodeEntity>)
+    @Query("DELETE FROM seasons WHERE seriesId = :seriesId") suspend fun deleteSeasons(seriesId: Int)
+    @Query("DELETE FROM episodes WHERE seriesId = :seriesId") suspend fun deleteEpisodes(seriesId: Int)
+
+    /**
+     * A series' seasons and episodes become exactly what the provider lists now. Upserting alone kept episodes the
+     * provider had replaced (same season and number, new id): the old id stayed first and no longer played.
+     */
+    @Transaction
+    suspend fun replaceSeriesDetail(seriesId: Int, seasons: List<SeasonEntity>, episodes: List<EpisodeEntity>) {
+        deleteSeasons(seriesId); deleteEpisodes(seriesId); upsertSeasons(seasons); upsertEpisodes(episodes)
+    }
 }
 
 @Dao

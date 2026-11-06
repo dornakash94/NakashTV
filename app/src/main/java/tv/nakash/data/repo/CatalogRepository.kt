@@ -159,8 +159,9 @@ class CatalogRepository @Inject constructor(
         // seasons missing from `seasons` but present in `episodes`
         val known = seasons.map { it.number }.toSet()
         val extra = eps.map { it.season }.distinct().filter { it !in known }.map { n -> SeasonEntity("$id:$n", id, n, "עונה $n", eps.count { it.season == n }, s.cover) }
-        vodDao.upsertSeasons(seasons + extra)
-        vodDao.upsertEpisodes(eps)
+        // An empty answer (provider hiccup) never wipes what the TV has.
+        if (eps.isNotEmpty()) vodDao.replaceSeriesDetail(id, seasons + extra, eps)
+        else vodDao.upsertSeasons(seasons + extra)
         vodDao.upsertSeries(s.copy(detailLoadedAt = System.currentTimeMillis()))
     }
 
