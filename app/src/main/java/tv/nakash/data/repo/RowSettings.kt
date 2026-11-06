@@ -50,6 +50,37 @@ class RowConfig @Inject constructor(okHttp: OkHttpClient, @ApplicationContext ct
 }
 
 /**
+ * What Home showed each profile on its last draws (titles "m12" / "s7", and row topics "t:actor:…"), so the next draws
+ * reach for other titles and other reasons. A few KB of SharedPreferences per profile; on the device only.
+ */
+@Singleton
+class ShownTitles @Inject constructor(@ApplicationContext ctx: Context) {
+    private val prefs = ctx.getSharedPreferences("shown_titles", Context.MODE_PRIVATE)
+    /** How many Home draws this profile had (a new seed for each). */
+    fun draws(profile: String): Int = prefs.getInt("$profile|draw", 0)
+    /** Keys shown on the last [ShownMemory.VISITS] draws. */
+    fun recent(profile: String): Set<String> = ShownMemory.recent(prefs.getString("$profile|keys", null).orEmpty(), draws(profile))
+    fun record(profile: String, keys: Collection<String>) {
+        val draw = draws(profile) + 1
+        prefs.edit().putInt("$profile|draw", draw)
+            .putString("$profile|keys", ShownMemory.add(prefs.getString("$profile|keys", null).orEmpty(), keys, draw)).apply()
+    }
+}
+
+/** The pure part of [ShownTitles]: "key\tdraw" lines, the newest kept. */
+object ShownMemory {
+    const val VISITS = 3
+    private const val MAX = 700
+    fun decode(s: String): Map<String, Int> = s.lineSequence().mapNotNull { l ->
+        val i = l.lastIndexOf('\t'); if (i <= 0) null else l.substring(i + 1).toIntOrNull()?.let { l.substring(0, i) to it }
+    }.toMap()
+    fun recent(s: String, draw: Int): Set<String> = decode(s).filterValues { draw - it < VISITS }.keys
+    fun add(s: String, keys: Collection<String>, draw: Int): String =
+        (decode(s) + keys.filter { '\n' !in it && '\t' !in it }.associateWith { draw }).entries
+            .sortedByDescending { it.value }.take(MAX).joinToString("\n") { "${it.key}\t${it.value}" }
+}
+
+/**
  * How each profile treats each row: how often it scrolled to it, and how often it opened a title from it. A themed row
  * the profile keeps passing without opening anything slides down the tab; one it opens from moves up. On the device only.
  */

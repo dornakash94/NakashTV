@@ -37,7 +37,7 @@ data class IdRow(val key: String, val title: String, val ids: List<Int>)
 @Singleton
 class RecommendationRepository @Inject constructor(
     private val catalog: CatalogRepository, private val profiles: ProfileStore, private val tmdb: TmdbRepository,
-    private val config: RowConfig, private val stats: RowStats,
+    private val config: RowConfig, private val stats: RowStats, private val shown: ShownTitles,
 ) {
     private class Library(val movies: List<MovieLite>, val series: List<SeriesLite>, val movieCats: Map<String, String>, val seriesCats: Map<String, String>, val at: Long)
     @Volatile private var library: Library? = null
@@ -67,22 +67,22 @@ class RecommendationRepository @Inject constructor(
     val generation = kotlinx.coroutines.flow.MutableStateFlow(0)
 
     /**
-     * The app is on screen again (TV turned back on, back from another app). After 30 minutes away, or when the last
-     * draw is 6 hours old, the rows get a new mix, so an app left open for days still changes.
+     * The app is on screen again (TV turned back on, back from another app). After 10 minutes away, or when the last
+     * draw is 3 hours old, the rows get a new mix, so an app left open for days still changes.
      */
     fun refreshIfStale(awayMs: Long) {
         val now = System.currentTimeMillis()
-        if (awayMs < 30 * 60_000L && now - drawnAt < 6 * 60 * 60_000L) return
+        if (awayMs < 10 * 60_000L && now - drawnAt < 3 * 60 * 60_000L) return
         sessionSalt = java.util.Random().nextLong(); drawnAt = now; library = null
         generation.value++
     }
-    /** Which rows show, and in what mix: a new draw on each app start and every 6 hours, stable while browsing; per profile. */
+    /** Which rows show, and in what mix: a new draw on each app start and every 3 hours, stable while browsing; per profile. */
     private fun slotSeed(profileId: String?): Long {
         val now = java.time.LocalDateTime.now()
-        return (now.toLocalDate().toEpochDay() * 4 + now.hour / 6) * 1_000_003 + (profileId?.hashCode() ?: 0) + sessionSalt
+        return (now.toLocalDate().toEpochDay() * 8 + now.hour / 3) * 1_000_003 + (profileId?.hashCode() ?: 0) + sessionSalt
     }
     /** Titles inside the themed rows reshuffle with the same rhythm. */
-    private fun shuffleSlot() = (sessionSalt and 0xffff).toInt() * 4 + java.time.LocalTime.now().hour / 6
+    private fun shuffleSlot() = (sessionSalt and 0xffff).toInt() * 8 + java.time.LocalTime.now().hour / 3
 
     /** Fills rows in order; a title already shown in an earlier row is skipped. */
     private class Deduper { private val used = HashSet<String>()
@@ -94,48 +94,172 @@ class RecommendationRepository @Inject constructor(
         }
     }
 
-    /** The personal rows for Home, best first. Empty for a profile with no history yet. */
-    suspend fun rows(profileId: String): List<RecRow> = withContext(Dispatchers.Default) {
+    /**
+     * The personal rows for Home. Empty for a profile with no history yet.
+     *
+     * Each draw (app start, back after a while, a new Home) is different: which reasons show (about 10 of a pool of
+     * 25 kinds, besides new episodes that always lead: "כי צפית ב…" / "כי שמרת את …", a film series to finish, series left half way, what the world watches,
+     * fresh releases, its actors / category / genre / two genres together / decade, hidden gems, classics, the top
+     * rated, a genre it has not tried, a taste of every genre, one for the hour, one for the time of year, short series (likelier near the weekend), its directors, the other kind of what it watches,
+     * themed rows), which titles lead each row (a draw from the top, not always the same best), and the order of
+     * the rows. What the last draws showed ([ShownTitles]) is held back, so the next visit reaches for other titles.
+     * Rows are still filled most-personal first, so a title shows in one row only. [record] = false: a look only
+     * ("מי צופה?"), the memory is left as it is.
+     */
+    suspend fun rows(profileId: String, record: Boolean = true): List<RecRow> = withContext(Dispatchers.Default) {
         val h = history(profileId); if (h.isEmpty) return@withContext emptyList()
         val lib = library()
         val seen = h.seenKeys()
         val affinity = Recommender.genreAffinity(h, lib.movies, lib.series)
+        val recent = shown.recent(profileId)
+        val seed = slotSeed(profileId) + shown.draws(profileId) * 7_919L
         val dedupe = Deduper(); val mixedKey: (Pair<Char, Int>) -> String = { "${it.first}${it.second}" }
         val rows = mutableListOf<Pair<IdRowMixed, String?>>()
-        fun add(key: String, title: String, sub: String?, items: List<Pair<Char, Int>>, min: Int = 4) {
-            dedupe.take(items, mixedKey, min = min)?.let { rows += IdRowMixed(key, title, it) to sub }
+        fun add(key: String, title: String, sub: String?, items: List<Pair<Char, Int>>, min: Int = 4, topic: String? = null, fresh: Boolean = true) {
+            val list = if (fresh) Recommender.freshen(items, seed + key.hashCode()) { mixedKey(it) in recent } else items
+            dedupe.take(list, mixedKey, min = min)?.let { rows += IdRowMixed(key, title, it, topic) to sub }
         }
-        add("rec_neweps", "פרקים חדשים בסדרות שלך", "עלו פרקים מאז שצפית", Recommender.newEpisodes(h, lib.series).map { 's' to it }, min = 1)
-        val seed = slotSeed(profileId)
-        becauseYouWatched(h, lib, seen, null, 2, seed).forEachIndexed { i, r -> add("rec_because_$i", r.title, null, r.items, min = 3) }
-        collections(h, lib, seen).take(1).forEachIndexed { i, r -> add("rec_coll_$i", r.title, "הסרטים הבאים בסדרה", r.items, min = 1) }
-        add("rec_new", "חדש בשבילך", "לפי הטעם שלך", Recommender.newForYou(affinity, lib.movies, lib.series, seen))
-        Recommender.rotate(Recommender.topActors(h, lib.movies, lib.series), 1, seed).forEachIndexed { i, actor ->
-            add("rec_actor_$i", "עוד עם $actor", "שחקן שאתה צופה בו הרבה", Recommender.byActor(actor, lib.movies, lib.series, seen))
+        /** [count] of [ranked] topics, the top more likely, ones shown on the last visits less. */
+        fun topics(kind: String, ranked: List<String>, count: Int) = Recommender.drawRanked(ranked, count, seed + kind.hashCode()) { "t:$kind:$it" in recent }
+
+        val now = java.time.LocalDateTime.now(); val year = now.year
+        val shownTopics = mutableListOf<String>()
+        var kindNow = ""
+        fun addK(key: String, title: String, sub: String?, items: List<Pair<Char, Int>>, min: Int = 6, topic: String? = null, fresh: Boolean = true) {
+            val before = rows.size
+            add(key, title, sub, items, min, topic, fresh)
+            if (rows.size > before) shownTopics += "t:kind:$kindNow"
         }
-        Recommender.rotate(Recommender.topCategories(h, lib.movies, lib.series).filter { (lib.seriesCats[it] ?: lib.movieCats[it])?.let(Recommender::tasteCategory) == true }, 1, seed).forEachIndexed { i, cat ->
-            val name = lib.seriesCats[cat] ?: lib.movieCats[cat] ?: return@forEachIndexed
-            add("rec_cat_$i", Recommender.categoryTitle(name), "ממה שאתה אוהב לראות", Recommender.byCategory(cat, affinity, lib.movies, lib.series, seen))
-        }
-        Recommender.rotate(affinity.entries.filter { it.value > 0 }.sortedByDescending { it.value }.map { it.key }, 2, seed).forEachIndexed { i, genre ->
-            add("rec_genre_$i", "$genre בשבילך", "הז׳אנר שהכי מתאים לך", Recommender.byGenre(genre, lib.movies, lib.series, seen))
-        }
-        // Two themed rows (a movie one and a series one), a different pair every 6 hours, leaning to the profile's taste.
-        val today = java.time.LocalDate.now()
-        for (series in listOf(false, true)) {
+        fun movieOrSeries(key: String) = if (key[0] == 'm') lib.movies.firstOrNull { it.id == key.drop(1).toIntOrNull() } else lib.series.firstOrNull { it.id == key.drop(1).toIntOrNull() }
+        fun themed(series: Boolean): suspend () -> Unit = {
             val pool = if (series) lib.series.map { Curated.Item(it.id, it.year, it.genres, it.rating, null, it.categoryIds, it.cast) }
                 else lib.movies.map { Curated.Item(it.id, it.year, it.genres, it.rating, it.runtimeMin, it.categoryIds, it.cast) }
             val specs = config.specs(series) ?: if (series) Curated.SERIES else Curated.MOVIES
-            val themed = Curated.rows(pool, series, today, extra = 20, slot = shuffleSlot(), specs = specs, categoryNames = if (series) lib.seriesCats else lib.movieCats)
-            themeWeights(themed, specs, affinity, profileId).let { w -> Recommender.pickWeighted(themed, 1, seed + if (series) 7 else 3) { w[it.key] ?: 1.0 } }.forEach { r ->
-                add("rec_theme_${if (series) "s" else "m"}", r.title, if (series) "סדרות" else "סרטים", r.ids.filter { if (series) "series:$it" !in seen else "movie:$it" !in seen }.map { (if (series) 's' else 'm') to it }, min = 6)
+            val rowsT = Curated.rows(pool, series, now.toLocalDate(), extra = 20, slot = shuffleSlot(), specs = specs, categoryNames = if (series) lib.seriesCats else lib.movieCats)
+            val w = themeWeights(rowsT, specs, affinity, profileId)
+            Recommender.pickWeighted(rowsT, 1, seed + if (series) 7 else 3) { (w[it.key] ?: 1.0) * if ("t:theme:${it.key}" in recent) 0.25 else 1.0 }.forEach { r ->
+                addK("rec_theme_${if (series) "s" else "m"}", r.title, if (series) "סדרות" else "סרטים", r.ids.filter { if (series) "series:$it" !in seen else "movie:$it" !in seen }.map { (if (series) 's' else 'm') to it }, topic = "t:theme:${r.key}")
             }
         }
+
+        add("rec_neweps", "פרקים חדשים בסדרות שלך", "עלו פרקים מאז שצפית", Recommender.newEpisodes(h, lib.series).map { 's' to it }, min = 1, fresh = false)
+        // The pool of row kinds, in fill order (the most personal first, so they get the best titles). Each draw shows
+        // HOME_ROWS of them, the heavier likelier, the ones shown on the last visits less; only the drawn ones are built.
+        val kinds = listOf(
+            Kind("because", 3.0) {
+                val st = Recommender.drawRanked(Recommender.seeds(h, lib.movies, lib.series).take(8), 4, seed + 11) { "t:because:${titleKey(it)}" in recent }
+                becauseRows(st, lib, seen, lovedKeys(h), 1).forEach { r -> addK("rec_because_0", r.title, r.subtitle, r.items, min = 3, topic = r.topic) }
+            },
+            Kind("saved", 1.5) {
+                val favs = h.favorites.filter { it.kind == "movie" || it.kind == "series" }.sortedByDescending { it.addedAt }.mapNotNull { movieOrSeries("${it.kind[0]}${it.refId}") }.take(8)
+                val st = Recommender.drawRanked(favs, 3, seed + 17) { "t:saved:${titleKey(it)}" in recent }
+                becauseRows(st, lib, seen, emptySet(), 1, saved = true).forEach { r -> addK("rec_saved", r.title, r.subtitle, r.items, min = 3, topic = r.topic) }
+            },
+            Kind("coll", 2.5) { collections(h, lib, seen).take(1).forEach { r -> addK("rec_coll_0", r.title, "הסרטים הבאים בסדרה", r.items, min = 1, fresh = false) } },
+            Kind("left", 2.5) { addK("rec_left", "סדרות שעזבת באמצע", "לא חזרת אליהן כבר כמה שבועות", Recommender.leftSeries(h, lib.series).map { 's' to it }, min = 2, fresh = false) },
+            Kind("trend", 2.0) {
+                // What the world watches this week (TMDB, cached for a week), kept to what the provider has.
+                if (tmdb.enabled) withTimeoutOrNull(6_000) {
+                    val m = LibraryMatch.match(tmdb.trending(false), lib.movies, { it.title }, { it.year }).filter { "movie:${it.id}" !in seen }.map { 'm' to it.id }
+                    val s = LibraryMatch.match(tmdb.trending(true), lib.series, { it.title }, { it.year }).filter { "series:${it.id}" !in seen }.map { 's' to it.id }
+                    Recommender.interleave(m, s)
+                }?.let { addK("rec_trend", "חם השבוע בעולם", "מה שכולם רואים עכשיו, ויש אצלך", it, min = 4) }
+            },
+            Kind("new", 2.0) { addK("rec_new", "חדש בשבילך", "עלה לאחרונה, לפי הטעם שלך", Recommender.newForYou(affinity, lib.movies, lib.series, seen), min = 4) },
+            Kind("fresh", 1.5) { addK("rec_fresh", "טריים מ־$year", "הכי חדשים שיצאו, בטעם שלך", Recommender.freshReleases(affinity, lib.movies, lib.series, seen, year)) },
+            Kind("actor", 2.0) {
+                topics("actor", Recommender.topActors(h, lib.movies, lib.series), 1).forEach { actor ->
+                    addK("rec_actor_0", "עוד עם $actor", "שחקן שאתה צופה בו הרבה", Recommender.byActor(actor, lib.movies, lib.series, seen), min = 4, topic = "t:actor:$actor")
+                }
+            },
+            Kind("director", 1.5) {
+                topics("director", Recommender.topDirectors(h, lib.movies), 1).forEach { d ->
+                    addK("rec_director", "עוד מהבמאי $d", "במאי שאתה חוזר אליו", Recommender.byDirector(d, lib.movies, seen), min = 3, topic = "t:director:$d")
+                }
+            },
+            Kind("stars", 1.2) { addK("rec_stars", "השחקנים שחוזרים אצלך", "כמה מהם יחד, באותו כותר", Recommender.byActors(Recommender.topActors(h, lib.movies, lib.series).take(8), lib.movies, lib.series, seen)) },
+            Kind("cat", 1.5) {
+                topics("cat", Recommender.topCategories(h, lib.movies, lib.series).filter { (lib.seriesCats[it] ?: lib.movieCats[it])?.let(Recommender::tasteCategory) == true }, 1).forEach { cat ->
+                    val name = lib.seriesCats[cat] ?: lib.movieCats[cat] ?: return@forEach
+                    addK("rec_cat_0", Recommender.categoryTitle(name), "ממה שאתה אוהב לראות", Recommender.byCategory(cat, affinity, lib.movies, lib.series, seen), min = 4, topic = "t:cat:$cat")
+                }
+            },
+            Kind("genre", 2.0) {
+                topics("genre", affinity.entries.filter { it.value > 0 }.sortedByDescending { it.value }.map { it.key }, 1).forEach { genre ->
+                    addK("rec_genre_0", "$genre בשבילך", "הז׳אנר שהכי מתאים לך", Recommender.byGenre(genre, lib.movies, lib.series, seen), min = 4, topic = "t:genre:$genre")
+                }
+            },
+            Kind("combo", 1.5) {
+                topics("combo", Recommender.genrePairs(affinity, lib.movies, lib.series, seen), 1).forEach { pair ->
+                    val (a, b) = pair.split('+', limit = 2)
+                    addK("rec_combo", "$a + $b", "שני ז׳אנרים שאתה אוהב, בכותר אחד", Recommender.byGenres(setOf(a, b), lib.movies, lib.series, seen), topic = "t:combo:$pair")
+                }
+            },
+            Kind("decade", 1.2) {
+                Recommender.favoriteDecade(h, lib.movies, lib.series, year)?.let { d ->
+                    addK("rec_decade", "${Recommender.decadeTitle(d)} שלך", "העשור שאתה הכי חוזר אליו", Recommender.byDecade(d, affinity, lib.movies, lib.series, seen))
+                }
+            },
+            Kind("gems", 1.5) { addK("rec_gems", "יהלומים נסתרים בשבילך", "מדורגים גבוה ופחות מוכרים, בז׳אנרים שלך", Recommender.hiddenGems(affinity, lib.movies, lib.series, seen, year)) },
+            Kind("classics", 1.2) { addK("rec_classics", "קלאסיקות שעוד לא ראית", "מהגדולים של פעם, בטעם שלך", Recommender.classics(affinity, lib.movies, lib.series, seen)) },
+            Kind("top", 1.0) { addK("rec_top", "הכי מדורגים שעוד לא ראית", "חובה לפחות פעם אחת", Recommender.topRated(affinity, lib.movies, lib.series, seen)) },
+            Kind("wild", 1.3) {
+                topics("wild", Recommender.untriedGenres(affinity, lib.movies, lib.series, seen), 1).forEach { genre ->
+                    addK("rec_wild", "משהו אחר: $genre", "הכי טובים בז׳אנר שכמעט לא ניסית", Recommender.byGenre(genre, lib.movies, lib.series, seen, minRating = 7.2), topic = "t:wild:$genre")
+                }
+            },
+            Kind("sampler", 1.0) { addK("rec_sampler", "טעימה מכל ז׳אנר", "הכי טוב מכל סוג, לגלות משהו חדש", Recommender.sampler(lib.movies, lib.series, seen), fresh = false) },
+            Kind("mood", 1.5) {
+                val mood = Recommender.mood(now)
+                val (title, sub) = when (mood) {
+                    Recommender.Mood.NIGHT -> "לפני השינה" to "סרטים עד שעה וארבעים, בטעם שלך"
+                    Recommender.Mood.WEEKEND -> "סרט ארוך לסופ״ש" to "יש זמן, הולכים על משהו גדול"
+                    Recommender.Mood.BINGE -> "סדרות לבינג׳" to "מדורגות גבוה, בז׳אנרים שלך"
+                }
+                addK("rec_mood", title, sub, Recommender.forMood(mood, affinity, lib.movies, lib.series, seen))
+            },
+            Kind("short", if (Recommender.weekendNear(now)) 2.5 else 1.2) {
+                val mini = if (tmdb.enabled) withTimeoutOrNull(6_000) { LibraryMatch.match(tmdb.miniseries(), lib.series, { it.title }, { it.year }).map { it.id }.toSet() }.orEmpty() else emptySet()
+                val totals = catalog.seasonTotals().associate { it.seriesId to (it.seasons to it.episodes) }
+                val weekend = Recommender.weekendNear(now)
+                addK("rec_short", if (weekend) "סדרות קצרות לסופ״ש" else "סדרות קצרות לכמה ערבים", if (weekend) "עונה אחת או מיני־סדרה, מסיימים עד מוצ״ש" else "עונה אחת או מיני־סדרה, בלי להתחייב לשנים",
+                    Recommender.shortSeries(lib.series, mini, totals, lib.seriesCats, affinity, seen))
+            },
+            Kind("season", 1.3) {
+                val sz = Recommender.seasonal(now.toLocalDate())
+                addK("rec_season", sz.title, sz.subtitle, Recommender.bySeason(sz, affinity, lib.movies, lib.series, seen), topic = "t:season:${sz.key}")
+            },
+            Kind("cross", 1.0) {
+                val main = Recommender.mainKind(h)
+                val other = if (main == 'm') 's' else 'm'
+                if (main != null) topics("cross", affinity.entries.filter { it.value > 0.3 }.sortedByDescending { it.value }.map { it.key }, 1).forEach { g ->
+                    val items = Recommender.byGenre(g, lib.movies, lib.series, seen, limit = 200, minRating = 6.8).filter { it.first == other }
+                    addK("rec_cross", if (other == 's') "גם בסדרות: $g" else "גם בסרטים: $g", if (other == 's') "רואה בעיקר סרטים? אלה סדרות בשבילך" else "רואה בעיקר סדרות? אלה סרטים בשבילך", items, topic = "t:cross:$g")
+                }
+            },
+            Kind("theme_m", 1.5, themed(false)),
+            Kind("theme_s", 1.5, themed(true)),
+        )
+        val drawn = Recommender.weightedOrder(kinds, seed + 13) { it.weight * if ("t:kind:${it.id}" in recent) 0.35 else 1.0 }
+        // Build the drawn kinds in fill order; when some come out empty, more are drawn until the screen is full.
+        var next = 0
+        while (next < drawn.size && rows.count { it.first.key != "rec_neweps" } < HOME_ROWS) {
+            val batch = drawn.subList(next, minOf(drawn.size, next + HOME_ROWS - rows.count { it.first.key != "rec_neweps" })).toSet()
+            next += batch.size
+            for (k in kinds) if (k in batch) { kindNow = k.id; try { k.build() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { } }
+        }
+        // New episodes stay on top; the rest in a new order every draw (the more personal still more likely higher).
+        val (top, rest) = rows.partition { it.first.key == "rec_neweps" }
+        val ordered = top + Recommender.mixOrder(rest, seed + 5)
+        if (record) shown.record(profileId, ordered.flatMap { (r, _) -> r.items.map(mixedKey) + listOfNotNull(r.topic) } + shownTopics)
         // Full titles only for what is shown.
-        val movies = catalog.moviesByIds(rows.flatMap { (r, _) -> r.items.filter { it.first == 'm' }.map { it.second } }.distinct()).associateBy { it.id }
-        val series = catalog.seriesByIds(rows.flatMap { (r, _) -> r.items.filter { it.first == 's' }.map { it.second } }.distinct()).associateBy { it.id }
-        rows.map { (r, sub) -> RecRow(r.key, r.title, sub, r.items.mapNotNull { (k, id) -> if (k == 'm') movies[id] else series[id] }) }.filter { it.items.isNotEmpty() }
+        val movies = catalog.moviesByIds(ordered.flatMap { (r, _) -> r.items.filter { it.first == 'm' }.map { it.second } }.distinct()).associateBy { it.id }
+        val series = catalog.seriesByIds(ordered.flatMap { (r, _) -> r.items.filter { it.first == 's' }.map { it.second } }.distinct()).associateBy { it.id }
+        ordered.map { (r, sub) -> RecRow(r.key, r.title, sub, r.items.mapNotNull { (k, id) -> if (k == 'm') movies[id] else series[id] }) }.filter { it.items.isNotEmpty() }
     }
+
+    private fun titleKey(t: Any) = when (t) { is MovieLite -> "m${t.id}"; is SeriesLite -> "s${t.id}"; else -> "" }
+    private fun lovedKeys(h: Recommender.History) = h.ratings.filter { it.value >= 2 }.map { "${it.kind[0]}${it.refId}" }.toSet()
 
     /**
      * Rows for the Movies or Series tab: the profile's own ("פרקים חדשים בסדרות שלך", "כי צפית ב…", film series to
@@ -203,7 +327,7 @@ class RecommendationRepository @Inject constructor(
             is tv.nakash.data.local.SeriesEntity -> item.backdrop?.let { ProfilePick(item.title, it, reason) }
             else -> null
         }
-        val perRow = rows(profileId).filter { it.key != "rec_neweps" }.map { r -> r.items.mapNotNull { pick(it, r.title) }.take(3) }
+        val perRow = rows(profileId, record = false).filter { it.key != "rec_neweps" }.map { r -> r.items.mapNotNull { pick(it, r.title) }.take(3) }
         val out = LinkedHashMap<String, ProfilePick>()
         for (i in 0 until 3) perRow.forEach { row -> row.getOrNull(i)?.let { out.putIfAbsent(it.title, it) } }
         if (out.size < 3) library().movies.asSequence().filter { it.backdrop != null }.take(limit).forEach { out.putIfAbsent(it.title, ProfilePick(it.title, it.backdrop!!, "חדש בשירות")) }
@@ -219,18 +343,27 @@ class RecommendationRepository @Inject constructor(
         }
     }
 
-    private companion object { const val THEMES_SHOWN = 9 }
+    private companion object { const val THEMES_SHOWN = 9; const val HOME_ROWS = 10 }
+
+    /** A kind of Home row: how likely it is drawn, and how it adds its row (or none, when it has too little). */
+    private class Kind(val id: String, val weight: Double, val build: suspend () -> Unit)
 
     /** Mixed ids: ('m', movieId) / ('s', seriesId). */
-    private data class IdRowMixed(val key: String, val title: String, val items: List<Pair<Char, Int>>)
+    private data class IdRowMixed(val key: String, val title: String, val items: List<Pair<Char, Int>>, val topic: String? = null, val subtitle: String? = null)
 
-    /** "כי צפית ב…": TMDB recommendations for the titles the profile loved / watched last (of [series] kind, or both), kept to the library. */
+    /** "כי צפית ב…" for the tabs: the latest title always, the others rotate among the next few (of [series] kind, or both). */
     private suspend fun becauseYouWatched(h: Recommender.History, lib: Library, seen: Set<String>, series: Boolean?, count: Int, seed: Long): List<IdRowMixed> {
+        val all = Recommender.seeds(h, lib.movies, lib.series).filter { series == null || (it is SeriesLite) == series }
+        return becauseRows(all.take(1) + all.drop(1).take(6).shuffled(java.util.Random(seed)), lib, seen, lovedKeys(h), count)
+    }
+
+    /**
+     * "כי צפית ב…" / "כי אהבת את …": TMDB recommendations for [seeds] (tried in order, a few spare ones for titles TMDB
+     * does not know), kept to the library and to what was not seen. Up to [count] rows.
+     */
+    private suspend fun becauseRows(seeds: List<Any>, lib: Library, seen: Set<String>, loved: Set<String>, count: Int, saved: Boolean = false): List<IdRowMixed> {
         if (!tmdb.enabled) return emptyList()
         val rows = mutableListOf<IdRowMixed>()
-        // The latest title always, the others rotate among the next few every 6 hours.
-        val all = Recommender.seeds(h, lib.movies, lib.series).filter { series == null || (it is SeriesLite) == series }
-        val seeds = all.take(1) + all.drop(1).take(6).shuffled(java.util.Random(seed))
         for (seed in seeds.take(count + 2)) {
             if (rows.size >= count) break
             val recs = withTimeoutOrNull(10_000) {
@@ -241,7 +374,13 @@ class RecommendationRepository @Inject constructor(
                 is SeriesLite -> seed.title to LibraryMatch.match(recs, lib.series, { it.title }, { it.year }).filter { "series:${it.id}" !in seen && it.id != seed.id }.map { 's' to it.id }
                 else -> continue
             }
-            if (items.size >= 3) rows += IdRowMixed("because_${rows.size}", "כי צפית ב־$title", items.distinct().take(30))
+            val key = titleKey(seed)
+            val lovedIt = key in loved
+            if (items.size >= 3) rows += when {
+                saved -> IdRowMixed("saved_${rows.size}", "כי שמרת את $title", items.distinct().take(30), topic = "t:saved:$key", subtitle = "דומים למה ששמרת לרשימה")
+                else -> IdRowMixed("because_${rows.size}", if (lovedIt) "כי אהבת את $title" else "כי צפית ב־$title", items.distinct().take(30),
+                    topic = "t:because:$key", subtitle = if (lovedIt) "סימנת שממש אהבת" else "דומים לו, לפי TMDB")
+            }
         }
         return rows
     }
@@ -478,10 +617,10 @@ object Recommender {
     private fun match(g: String, affinity: Map<String, Double>) = genres(g).sumOf { affinity[it] ?: 0.0 }
     private fun quality(rating: Double?, year: Int?) = (rating ?: 5.0) + ((year ?: 2000) - 2000).coerceIn(0, 30) / 30.0
 
-    /** The best titles of a genre the profile has not seen, movies and series mixed. */
-    fun byGenre(genre: String, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, limit: Int = 30): List<Pair<Char, Int>> {
-        val m = movies.filter { genre in genres(it.genres) && "movie:${it.id}" !in seen }.sortedByDescending { quality(it.rating, it.year) }.map { 'm' to it.id }
-        val s = series.filter { genre in genres(it.genres) && "series:${it.id}" !in seen }.sortedByDescending { quality(it.rating, it.year) }.map { 's' to it.id }
+    /** The best titles of a genre the profile has not seen (rated [minRating] or more), movies and series mixed. */
+    fun byGenre(genre: String, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, limit: Int = 30, minRating: Double = 0.0): List<Pair<Char, Int>> {
+        val m = movies.filter { genre in genres(it.genres) && "movie:${it.id}" !in seen && (it.rating ?: 0.0) >= minRating }.sortedByDescending { quality(it.rating, it.year) }.map { 'm' to it.id }
+        val s = series.filter { genre in genres(it.genres) && "series:${it.id}" !in seen && (it.rating ?: 0.0) >= minRating }.sortedByDescending { quality(it.rating, it.year) }.map { 's' to it.id }
         return interleave(m, s).take(limit)
     }
 
@@ -501,7 +640,258 @@ object Recommender {
             .sortedByDescending { it.second }.take(limit).map { it.first.id }.toList()
     }
 
-    private fun <T> interleave(a: List<T>, b: List<T>): List<T> = buildList {
+    /** java.util.Random's first draws are alike for nearby seeds (1, 2, 3…): the seed is mixed first. */
+    private fun rng(seed: Long) = java.util.Random(java.util.SplittableRandom(seed).nextLong())
+
+    /**
+     * A fresh pick of a ranked list: the top [window] drawn again per [seed], the higher ranked more likely ahead, and
+     * the ones [recent] (shown on the last visits) mostly at the back. Same seed, same order.
+     */
+    fun <T> freshen(ranked: List<T>, seed: Long, window: Int = 45, limit: Int = 30, recent: (T) -> Boolean = { false }): List<T> {
+        val rnd = rng(seed)
+        return ranked.take(window).mapIndexed { i, it -> it to Math.pow(rnd.nextDouble(), 1.0 / ((1.0 / (1 + i * 0.12)) * if (recent(it)) 0.12 else 1.0)) }
+            .sortedByDescending { it.second }.take(limit).map { it.first }
+    }
+
+    /**
+     * [count] of the first [pool] of [ranked], drawn per [seed]: the top is likelier but not certain, ones shown on the
+     * last visits ([recent]) much less likely. In drawn order.
+     */
+    fun <T> drawRanked(ranked: List<T>, count: Int, seed: Long, pool: Int = 6, recent: (T) -> Boolean = { false }): List<T> {
+        val rnd = rng(seed)
+        return ranked.take(pool).mapIndexed { i, it -> it to Math.pow(rnd.nextDouble(), 1.0 / ((1.0 / (1 + i * 0.6)) * if (recent(it)) 0.2 else 1.0)) }
+            .sortedByDescending { it.second }.take(count).map { it.first }
+    }
+
+    /** The rows in a new order per [seed]; the first (most personal) ones are likelier to stay near the top. */
+    fun <T> mixOrder(rows: List<T>, seed: Long): List<T> {
+        val rnd = rng(seed)
+        return rows.mapIndexed { i, it -> it to Math.pow(rnd.nextDouble(), 1.0 + i * 0.6) }.sortedByDescending { it.second }.map { it.first }
+    }
+
+    /**
+     * Series the profile stopped in the middle of an episode, long enough ago (10 days to a year) that they fell out of
+     * "המשך צפייה" (its 12 latest) and out of mind. At least two episodes watched; not a disliked one. Most watched first.
+     */
+    fun leftSeries(h: History, series: List<SeriesLite>, now: Long = System.currentTimeMillis()): List<Int> {
+        val inContinue = h.progress.filter { !it.completed }.sortedByDescending { it.updatedAt }.take(12).mapNotNull { it.seriesId }.toSet()
+        val known = series.mapTo(HashSet()) { it.id }
+        val disliked = h.disliked
+        return h.progress.filter { it.kind == "episode" && it.seriesId != null }.groupBy { it.seriesId!! }.filter { (sid, eps) ->
+            val last = eps.maxBy { it.updatedAt }
+            val age = now - last.updatedAt
+            sid in known && sid !in inContinue && "series:$sid" !in disliked && !last.completed && eps.size >= 2 &&
+                age in 10L * 86_400_000..365L * 86_400_000
+        }.entries.sortedByDescending { it.value.size }.map { it.key }
+    }
+
+    /**
+     * Hidden gems: well rated (7.2 to 8.4: the 8.5+ everyone knows), at least 3 years old, not among the newest the
+     * "חדש" rows show, in the profile's genres. Best fit first.
+     */
+    fun hiddenGems(affinity: Map<String, Double>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, year: Int, limit: Int = 40): List<Pair<Char, Int>> {
+        if (affinity.isEmpty()) return emptyList()
+        fun ok(rating: Double?, y: Int?, g: String) = (rating ?: 0.0) in 7.2..8.4 && (y ?: year) <= year - 3 && match(g, affinity) >= .4
+        val m = movies.drop(400).filter { "movie:${it.id}" !in seen && ok(it.rating, it.year, it.genres) }.sortedByDescending { match(it.genres, affinity) * (it.rating ?: 0.0) }.map { 'm' to it.id }
+        val s = series.drop(250).filter { "series:${it.id}" !in seen && ok(it.rating, it.year, it.genres) }.sortedByDescending { match(it.genres, affinity) * (it.rating ?: 0.0) }.map { 's' to it.id }
+        return interleave(m, s).take(limit)
+    }
+
+    /** Genres for kids or daytime TV are no surprise for a grown-up profile. */
+    private val NOT_WILD = Regex("ילדים|משפחה|מדובב|ריאליטי|טלנובלה|סבון|אירוח|חדשות|טלוויזיה|Kids|Reality|News|Talk|Soap", RegexOption.IGNORE_CASE)
+
+    /**
+     * "משהו אחר": genres the profile hardly watches (fit under 0.2, never one it dislikes) that have at least 8 unseen
+     * titles rated 7.2+. The best stocked first.
+     */
+    fun untriedGenres(affinity: Map<String, Double>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>): List<String> {
+        if (affinity.isEmpty()) return emptyList()
+        val count = HashMap<String, Int>()
+        movies.forEach { m -> if ((m.rating ?: 0.0) >= 7.2 && "movie:${m.id}" !in seen) genres(m.genres).forEach { count[it] = (count[it] ?: 0) + 1 } }
+        series.forEach { s -> if ((s.rating ?: 0.0) >= 7.2 && "series:${s.id}" !in seen) genres(s.genres).forEach { count[it] = (count[it] ?: 0) + 1 } }
+        return count.filter { (g, n) -> n >= 8 && (affinity[g] ?: 0.0) in 0.0..0.2 && !NOT_WILD.containsMatchIn(g) }.entries.sortedByDescending { it.value }.map { it.key }
+    }
+
+    /** All of [items] in a drawn order per [seed]: the heavier the [weight], the likelier ahead. */
+    fun <T> weightedOrder(items: List<T>, seed: Long, weight: (T) -> Double): List<T> {
+        val rnd = rng(seed)
+        return items.map { it to Math.pow(rnd.nextDouble(), 1.0 / weight(it).coerceAtLeast(0.01)) }.sortedByDescending { it.second }.map { it.first }
+    }
+
+    private fun fit(genres: String, rating: Double?, year: Int?, affinity: Map<String, Double>) = (1 + match(genres, affinity)) * quality(rating, year)
+    private fun mixed(movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, limit: Int, okM: (MovieLite) -> Boolean, okS: (SeriesLite) -> Boolean,
+                      scoreM: (MovieLite) -> Double, scoreS: (SeriesLite) -> Double): List<Pair<Char, Int>> {
+        val m = movies.filter { "movie:${it.id}" !in seen && okM(it) }.sortedByDescending(scoreM).map { 'm' to it.id }
+        val s = series.filter { "series:${it.id}" !in seen && okS(it) }.sortedByDescending(scoreS).map { 's' to it.id }
+        return interleave(m, s).take(limit)
+    }
+
+    /** "טריים מ־…": out this year or last, rated 6.3+, in the profile's genres. */
+    fun freshReleases(affinity: Map<String, Double>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, year: Int, limit: Int = 40): List<Pair<Char, Int>> {
+        if (affinity.isEmpty()) return emptyList()
+        fun ok(r: Double?, y: Int?, g: String) = (y ?: 0) >= year - 1 && (r ?: 0.0) >= 6.3 && match(g, affinity) >= .3
+        return mixed(movies, series, seen, limit, { ok(it.rating, it.year, it.genres) }, { ok(it.rating, it.year, it.genres) },
+            { fit(it.genres, it.rating, it.year, affinity) }, { fit(it.genres, it.rating, it.year, affinity) })
+    }
+
+    /** "השחקנים שלך": titles with several of the profile's [actors] lead the ones with one. */
+    fun byActors(actors: List<String>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, limit: Int = 40): List<Pair<Char, Int>> {
+        if (actors.size < 2) return emptyList()
+        val set = actors.toSet()
+        fun n(cast: String?) = castOf(cast, 6).count { it in set }
+        return mixed(movies, series, seen, limit, { n(it.cast) > 0 }, { n(it.cast) > 0 },
+            { n(it.cast) * 10 + quality(it.rating, it.year) }, { n(it.cast) * 10 + quality(it.rating, it.year) })
+    }
+
+    /** Pairs of the profile's top genres ("a+b") that share at least 6 unseen titles rated 6.5+, the best liked first. */
+    fun genrePairs(affinity: Map<String, Double>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>): List<String> {
+        val top = affinity.entries.filter { it.value > 0.15 }.sortedByDescending { it.value }.take(5).map { it.key }
+        val pairs = top.flatMapIndexed { i, a -> top.drop(i + 1).map { b -> a to b } }
+        return pairs.filter { (a, b) -> byGenres(setOf(a, b), movies, series, seen).size >= 6 }
+            .sortedByDescending { (a, b) -> (affinity[a] ?: 0.0) + (affinity[b] ?: 0.0) }.map { (a, b) -> "$a+$b" }
+    }
+
+    /** Titles in all of [all] genres, rated 6.5+, best first. */
+    fun byGenres(all: Set<String>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, limit: Int = 40): List<Pair<Char, Int>> =
+        mixed(movies, series, seen, limit, { (it.rating ?: 0.0) >= 6.5 && genres(it.genres).containsAll(all) }, { (it.rating ?: 0.0) >= 6.5 && genres(it.genres).containsAll(all) },
+            { quality(it.rating, it.year) }, { quality(it.rating, it.year) })
+
+    /**
+     * The decade the profile keeps going back to (weighted like [titleWeights], at least 3 titles), when it is not the
+     * last few years (that is just "new"). Null when none stands out.
+     */
+    fun favoriteDecade(h: History, movies: List<MovieLite>, series: List<SeriesLite>, year: Int, now: Long = System.currentTimeMillis()): Int? {
+        val movieById = movies.associateBy { it.id }; val seriesById = series.associateBy { it.id }
+        val score = HashMap<Int, Double>(); val count = HashMap<Int, Int>()
+        titleWeights(h, now).forEach { (k, w) ->
+            if (w <= 0) return@forEach
+            val id = k.drop(1).toIntOrNull() ?: return@forEach
+            val y = (if (k[0] == 'm') movieById[id]?.year else seriesById[id]?.year) ?: return@forEach
+            val d = y / 10 * 10; score[d] = (score[d] ?: 0.0) + w; count[d] = (count[d] ?: 0) + 1
+        }
+        return score.filterKeys { (count[it] ?: 0) >= 3 && it + 9 < year - 5 }.maxByOrNull { it.value }?.key
+    }
+    fun decadeTitle(d: Int) = if (d < 2000) "שנות ה־${d % 100}" else "שנות ה־$d"
+
+    /** The best of a [decade] (rated 6.5+), genre fit first. */
+    fun byDecade(decade: Int, affinity: Map<String, Double>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, limit: Int = 40): List<Pair<Char, Int>> {
+        fun ok(r: Double?, y: Int?) = (r ?: 0.0) >= 6.5 && (y ?: 0) in decade..decade + 9
+        return mixed(movies, series, seen, limit, { ok(it.rating, it.year) }, { ok(it.rating, it.year) },
+            { fit(it.genres, it.rating, it.year, affinity) }, { fit(it.genres, it.rating, it.year, affinity) })
+    }
+
+    /** "קלאסיקות שעוד לא ראית": up to 2000, rated 7.8+, in the profile's genres (or 8.3+ in any). */
+    fun classics(affinity: Map<String, Double>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, limit: Int = 40): List<Pair<Char, Int>> {
+        fun ok(r: Double?, y: Int?, g: String) = (y ?: 9999) <= 2000 && ((r ?: 0.0) >= 8.3 || ((r ?: 0.0) >= 7.8 && match(g, affinity) >= .3))
+        return mixed(movies, series, seen, limit, { ok(it.rating, it.year, it.genres) }, { ok(it.rating, it.year, it.genres) },
+            { fit(it.genres, it.rating, it.year, affinity) }, { fit(it.genres, it.rating, it.year, affinity) })
+    }
+
+    /** "הכי מדורגים שעוד לא ראית": rated 8.2+, any genre (not one the profile dislikes), highest first. */
+    fun topRated(affinity: Map<String, Double>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, limit: Int = 40): List<Pair<Char, Int>> {
+        fun ok(r: Double?, g: String) = (r ?: 0.0) >= 8.2 && genres(g).none { (affinity[it] ?: 0.0) < 0 }
+        return mixed(movies, series, seen, limit, { ok(it.rating, it.genres) }, { ok(it.rating, it.genres) }, { it.rating ?: 0.0 }, { it.rating ?: 0.0 })
+    }
+
+    /** "טעימה מכל ז׳אנר": the best unseen title (7.0+) of each of the library's biggest genres, one per genre. */
+    fun sampler(movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, genresCount: Int = 16): List<Pair<Char, Int>> {
+        val items = movies.filter { "movie:${it.id}" !in seen && (it.rating ?: 0.0) >= 7.0 }.map { Triple('m', it.id, it) to (it.genres to (it.rating ?: 0.0)) } +
+            series.filter { "series:${it.id}" !in seen && (it.rating ?: 0.0) >= 7.0 }.map { Triple('s', it.id, it) to (it.genres to (it.rating ?: 0.0)) }
+        val byGenre = HashMap<String, MutableList<Pair<Pair<Char, Int>, Double>>>()
+        items.forEach { (t, gr) -> genres(gr.first).filterNot { NOT_WILD.containsMatchIn(it) }.forEach { g -> byGenre.getOrPut(g) { mutableListOf() } += (t.first to t.second) to gr.second } }
+        val used = HashSet<Pair<Char, Int>>()
+        return byGenre.entries.filter { it.value.size >= 3 }.sortedByDescending { it.value.size }.take(genresCount).mapNotNull { (_, list) ->
+            list.sortedByDescending { it.second }.map { it.first }.firstOrNull { used.add(it) }
+        }
+    }
+
+    /** What the hour suggests: late night a short movie, a weekend a long one, otherwise a series to binge. */
+    enum class Mood { NIGHT, WEEKEND, BINGE }
+    fun mood(now: java.time.LocalDateTime): Mood = when {
+        now.hour >= 22 || now.hour < 3 -> Mood.NIGHT
+        now.dayOfWeek == java.time.DayOfWeek.SATURDAY || (now.dayOfWeek == java.time.DayOfWeek.FRIDAY && now.hour >= 14) -> Mood.WEEKEND
+        else -> Mood.BINGE
+    }
+    fun forMood(mood: Mood, affinity: Map<String, Double>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, limit: Int = 40): List<Pair<Char, Int>> = when (mood) {
+        Mood.NIGHT -> mixed(movies, emptyList(), seen, limit, { (it.runtimeMin ?: 0) in 70..100 && (it.rating ?: 0.0) >= 6.5 }, { false }, { fit(it.genres, it.rating, it.year, affinity) }, { 0.0 })
+        Mood.WEEKEND -> mixed(movies, emptyList(), seen, limit, { (it.runtimeMin ?: 0) >= 135 && (it.rating ?: 0.0) >= 7.0 }, { false }, { fit(it.genres, it.rating, it.year, affinity) }, { 0.0 })
+        Mood.BINGE -> mixed(emptyList(), series, seen, limit, { false }, { (it.rating ?: 0.0) >= 7.5 && match(it.genres, affinity) >= .4 }, { 0.0 }, { fit(it.genres, it.rating, it.year, affinity) })
+    }
+
+    /** 'm' when 70%+ of what the profile watched is movies, 's' for series, null when it watches both. */
+    fun mainKind(h: History, now: Long = System.currentTimeMillis()): Char? {
+        val w = titleWeights(h, now).filterValues { it > 0 }
+        val total = w.values.sum().takeIf { it > 0 } ?: return null
+        val movies = w.filterKeys { it[0] == 'm' }.values.sum() / total
+        return when { movies >= .7 -> 'm'; movies <= .3 -> 's'; else -> null }
+    }
+
+    internal fun directorsOf(d: String?) = d.orEmpty().split(',').map { it.trim() }.filter { it.length > 2 }.take(2)
+
+    /** Directors the profile follows: in two watched movies or more, or in one it loved. Best first. */
+    fun topDirectors(h: History, movies: List<MovieLite>, now: Long = System.currentTimeMillis()): List<String> {
+        val movieById = movies.associateBy { it.id }
+        val score = HashMap<String, Double>(); val titles = HashMap<String, Int>(); val loved = HashSet<String>()
+        val lovedTitles = h.ratings.filter { it.value >= 2 }.map { "${it.kind[0]}${it.refId}" }.toSet()
+        titleWeights(h, now).forEach { (k, w) ->
+            if (w <= 0 || k[0] != 'm') return@forEach
+            directorsOf(k.drop(1).toIntOrNull()?.let { movieById[it] }?.director).forEach { d ->
+                score[d] = (score[d] ?: 0.0) + w; titles[d] = (titles[d] ?: 0) + 1; if (k in lovedTitles) loved += d
+            }
+        }
+        return score.filterKeys { (titles[it] ?: 0) >= 2 || it in loved }.entries.sortedByDescending { it.value }.map { it.key }
+    }
+
+    /** The unseen movies of a [director], best first. */
+    fun byDirector(director: String, movies: List<MovieLite>, seen: Set<String>, limit: Int = 30): List<Pair<Char, Int>> =
+        movies.filter { "movie:${it.id}" !in seen && director in directorsOf(it.director) }.sortedByDescending { quality(it.rating, it.year) }.take(limit).map { 'm' to it.id }
+
+    /** A row for the time of year: its title, why, the genres it draws on, and words a title may hold. */
+    data class Seasonal(val key: String, val title: String, val subtitle: String, val genres: Set<String>, val words: Regex? = null)
+    fun seasonal(date: java.time.LocalDate): Seasonal {
+        val md = date.monthValue * 100 + date.dayOfMonth
+        return when {
+            md in 1210..1231 || md <= 102 -> Seasonal("holidays", "אווירת חג", "חנוכה, חג המולד וסוף השנה", setOf("משפחה", "אנימציה", "קומדיה", "פנטזיה"),
+                Regex("christmas|xmas|santa|holiday|hanukkah|chanukah|חנוכה|כריסמס|חג המולד|סנטה", RegexOption.IGNORE_CASE))
+            md in 207..214 -> Seasonal("love", "שבוע האהבה", "לקראת ולנטיין", setOf("רומנטי", "רומנטיקה"))
+            md in 1015..1101 -> Seasonal("halloween", "עונת הפחד", "לקראת ליל כל הקדושים", setOf("אימה"), Regex("halloween|ליל כל הקדושים", RegexOption.IGNORE_CASE))
+            date.monthValue in 7..8 -> Seasonal("summer", "חופש גדול בבית", "הרפתקאות וצחוק לימי הקיץ", setOf("הרפתקאות", "קומדיה", "משפחה", "אנימציה", "אקשן והרפתקאות"))
+            date.monthValue == 12 || date.monthValue in 1..2 -> Seasonal("winter", "ערב חורף מתחת לשמיכה", "דרמות ורומנטיקה לערבים קרים", setOf("דרמה", "רומנטי", "רומנטיקה"))
+            date.monthValue in 3..5 -> Seasonal("spring", "חופשת אביב", "קלילים, למשפחה ולחברים", setOf("קומדיה", "משפחה", "אנימציה", "מוזיקה"))
+            else -> Seasonal("autumn", "ערבי סתיו", "מתח ותעלומות לערבים שמתקצרים", setOf("מותחן", "מתח", "מסתורין", "מיסתורין", "פשע"))
+        }
+    }
+    /** Titles for [s]: ones whose name fits its words first, then its genres (rated 6.5+), genre fit first. */
+    fun bySeason(s: Seasonal, affinity: Map<String, Double>, movies: List<MovieLite>, series: List<SeriesLite>, seen: Set<String>, limit: Int = 40): List<Pair<Char, Int>> {
+        fun named(t: String) = s.words?.containsMatchIn(t) == true
+        fun ok(t: String, g: String, r: Double?) = named(t) || ((r ?: 0.0) >= 6.5 && genres(g).any { it in s.genres })
+        return mixed(movies, series, seen, limit, { ok(it.title, it.genres, it.rating) }, { ok(it.title, it.genres, it.rating) },
+            { (if (named(it.title)) 100.0 else 0.0) + fit(it.genres, it.rating, it.year, affinity) },
+            { (if (named(it.title)) 100.0 else 0.0) + fit(it.genres, it.rating, it.year, affinity) })
+    }
+
+    private val MINI = Regex("מיני|mini", RegexOption.IGNORE_CASE)
+
+    /**
+     * Short series, to finish in a weekend or a few evenings: TMDB miniseries the provider has ([mini]), the provider's
+     * own miniseries categories, and series known on the device ([totals]: seriesId to (seasons, episodes)) to be one
+     * season of up to 10 episodes. A series known to be longer (over 12 episodes) never counts. Rated 6.8+ (or no
+     * rating, for a known miniseries), genre fit first.
+     */
+    fun shortSeries(series: List<SeriesLite>, mini: Set<Int>, totals: Map<Int, Pair<Int, Int>>, categoryNames: Map<String, String>,
+                    affinity: Map<String, Double>, seen: Set<String>, limit: Int = 40): List<Pair<Char, Int>> =
+        series.asSequence().filter { s ->
+            val t = totals[s.id]
+            val known = t != null && t.first == 1 && t.second in 2..10
+            val tagged = s.id in mini || s.categoryIds.split(',').any { id -> categoryNames[id]?.let(MINI::containsMatchIn) == true }
+            "series:${s.id}" !in seen && (t == null || t.second <= 12) && (known || tagged) && ((s.rating ?: 0.0) >= 6.8 || (s.rating == null && tagged))
+        }.sortedByDescending { fit(it.genres, it.rating ?: 7.0, it.year, affinity) }.take(limit).map { 's' to it.id }.toList()
+
+    /** Thursday evening to Saturday: when a short series fits best. */
+    fun weekendNear(now: java.time.LocalDateTime) = now.dayOfWeek == java.time.DayOfWeek.FRIDAY || now.dayOfWeek == java.time.DayOfWeek.SATURDAY ||
+        (now.dayOfWeek == java.time.DayOfWeek.THURSDAY && now.hour >= 17)
+
+    fun <T> interleave(a: List<T>, b: List<T>): List<T> = buildList {
         val n = maxOf(a.size, b.size); for (i in 0 until n) { a.getOrNull(i)?.let(::add); b.getOrNull(i)?.let(::add) }
     }
 }

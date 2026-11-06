@@ -50,6 +50,13 @@ class TmdbRepository @Inject constructor(okHttp: OkHttpClient, private val prefs
             ?.let { runCatching { TmdbParser.trending(it, tv) }.getOrNull() }.orEmpty() }
     }
 
+    /** Miniseries (TMDB type 2), the most voted first: 5 pages, cached a week like everything here. */
+    suspend fun miniseries(): List<tv.nakash.domain.TmdbTitle> = withContext(Dispatchers.IO) {
+        val key = prefs.key.value ?: return@withContext emptyList()
+        (1..5).flatMap { page -> get(url("discover/tv", key) { addQueryParameter("with_type", "2"); addQueryParameter("sort_by", "vote_count.desc"); addQueryParameter("page", page.toString()) })
+            ?.let { runCatching { TmdbParser.trending(it, true) }.getOrNull() }.orEmpty() }
+    }
+
     /** The movies of a film series (TMDB collection), oldest first. */
     suspend fun collection(id: Int): List<tv.nakash.domain.TmdbTitle> = withContext(Dispatchers.IO) {
         val key = prefs.key.value ?: return@withContext emptyList()
