@@ -49,6 +49,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import tv.nakash.data.local.ChannelEntity
 import tv.nakash.ui.theme.NakashColors
 
@@ -106,9 +107,57 @@ internal suspend fun androidx.compose.foundation.lazy.LazyListState.slideToItem(
 }
 
 /** Puts a card's wide picture on disk ahead of time (memory untouched: what is on screen stays decoded). */
-internal fun prefetchWide(ctx: android.content.Context, url: String?) {
+internal fun prefetchWide(ctx: android.content.Context, url: String?, size: androidx.compose.ui.unit.IntSize) {
     url ?: return
-    coil3.SingletonImageLoader.get(ctx).enqueue(coil3.request.ImageRequest.Builder(ctx).data(url).size(800, 450).memoryCachePolicy(coil3.request.CachePolicy.DISABLED).build())
+    coil3.SingletonImageLoader.get(ctx).enqueue(wideRequest(ctx, url, size))
+}
+
+/** Dwell on a card before its trailer starts (browsing past cards never loads video). */
+internal const val TrailerDwellMs = 1_000L
+/** Fade of a wide picture that had to be loaded (one already in memory shows at once). */
+private const val WideFadeMs = 160
+private val CanBlur = android.os.Build.VERSION.SDK_INT >= 31
+
+@Composable
+internal fun rememberPx(w: Dp, h: Dp): androidx.compose.ui.unit.IntSize {
+    val d = LocalDensity.current
+    return remember(d, w, h) { with(d) { androidx.compose.ui.unit.IntSize(w.roundToPx(), h.roundToPx()) } }
+}
+
+/** One request shape for a card's wide picture, shared by the card and the prefetch: same size, same memory key. */
+internal fun wideRequest(ctx: android.content.Context, url: String, size: androidx.compose.ui.unit.IntSize) =
+    coil3.request.ImageRequest.Builder(ctx).data(url).size(size.width, size.height).memoryCacheKey("wide:${size.width}x${size.height}:$url").build()
+
+/**
+ * A card's wide picture. One already in memory (prefetched) is on screen in the frame the card widens; one that has
+ * to load fades in over the poster. When the picture changes (TMDB's sharper one arriving after the provider's), the
+ * old one stays until the new one is up, so the card never drops back to the poster in between. Portrait pictures
+ * the provider calls "backdrop" are never shown wide. [onShown] tells the card whether a wide picture is up.
+ */
+@Composable
+internal fun WidePicture(url: String?, size: androidx.compose.ui.unit.IntSize, onShown: (Boolean) -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val layers = remember { ArrayList<String>(2) }
+    var revision by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    if (revision < 0) return // read: a layer dropping out redraws the stack
+    if (url != null && layers.lastOrNull() != url) { layers.remove(url); layers.add(url) }
+    for (u in layers.toList()) androidx.compose.runtime.key(u) {
+        val alpha = remember { androidx.compose.animation.core.Animatable(0f) }
+        val scope = rememberCoroutineScope()
+        AsyncImage(remember(u, size) { wideRequest(ctx, u, size) }, null, Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha.value }, contentScale = ContentScale.Crop,
+            onSuccess = { st ->
+                val sz = st.painter.intrinsicSize
+                if (sz.width > 0f && sz.width / sz.height >= 1.6f) {
+                    onShown(true)
+                    scope.launch {
+                        if (st.result.dataSource == coil3.decode.DataSource.MEMORY_CACHE) alpha.snapTo(1f) else alpha.animateTo(1f, tween(WideFadeMs))
+                        // Up: the pictures under it are no longer needed.
+                        if (layers.lastOrNull() == u && layers.size > 1) { layers.retainAll(listOf(u)); revision++ }
+                    }
+                } else { layers.remove(u); revision++; if (layers.isEmpty()) onShown(false) }
+            },
+            onError = { layers.remove(u); revision++; if (layers.isEmpty()) onShown(false) })
+    }
 }
 
 /**
@@ -161,23 +210,34 @@ fun NetflixRowsPage(
         want = null
         val c = focused ?: return@LaunchedEffect
         if (c.kind != CardKind.POSTER) return@LaunchedEffect
+        val focusedAt = android.os.SystemClock.elapsedRealtime()
+        // The YouTube page is loaded (paused) while you are still deciding: the slow part of a first trailer is that
+        // page, not the video. After it, a trailer is only a video swap inside the same page.
+        launch { trailerOf(c)?.let { k -> TrailerPlayer.trace("key ${k} after ${android.os.SystemClock.elapsedRealtime() - focusedAt} ms"); TrailerPlayer.warm(ctxForPrefetch, k) } }
         // A real pause on the card, not a pass through it: a trailer loading while you browse stutters weak boxes.
-        delay(1_200)
+        delay(TrailerDwellMs)
         val k = trailerOf(c) ?: return@LaunchedEffect
         cardBounds = liveBounds[0]; want = k
     }
-    LaunchedEffect(focusedShelf, shelves) {
+    LaunchedEffect(focusedShelf, focusedCard, shelves) {
+        // Lookups start together (one at a time made the 8th card wait for the 7 before it), nearest cards first.
         val i = shelves.indexOfFirst { it.key == focusedShelf }
-        (shelves.getOrNull(i)?.cards.orEmpty().take(10) + shelves.getOrNull(i + 1)?.cards.orEmpty().take(3)).filter { it.kind == CardKind.POSTER }.forEach { trailerOf(it) }
+        val row = shelves.getOrNull(i)?.cards.orEmpty()
+        val at = row.indexOfFirst { it.key == focusedCard }.coerceAtLeast(0)
+        (row.drop(at).take(4) + row.take(10) + shelves.getOrNull(i + 1)?.cards.orEmpty().take(3)).distinctBy { it.key }
+            .filter { it.kind == CardKind.POSTER }.forEach { c -> launch { trailerOf(c) } }
     }
     val target = want?.let { k -> cardBounds?.let { TrailerTarget(k, it.translate(-stageOrigin), 10f) } }
     LaunchedEffect(focusedShelf) { val i = shelves.indexOfFirst { it.key == focusedShelf }; if (i >= 0) list.slideToItem(i) }
-    // The wide pictures of the next cards are on disk before you get there, so a step shows its picture at once.
+    // The wide pictures of the cards next to the focused one are decoded in memory before you get there (at the
+    // card's exact size and memory key), so a step shows its picture in the same frame, as on Netflix.
+    val wideSize = rememberPx(PosterWide, PosterH)
     LaunchedEffect(focusedShelf, focusedCard) {
         val cards = shelves.firstOrNull { it.key == focusedShelf }?.cards ?: return@LaunchedEffect
         val at = cards.indexOfFirst { it.key == focusedCard }.coerceAtLeast(0)
-        delay(150)
-        cards.drop(at + 1).take(2).forEach { c -> prefetchWide(ctxForPrefetch, (wideOf(c.key).value ?: c.wide)?.let(::cardSized)) }
+        delay(100)
+        (cards.drop(at + 1).take(2) + listOfNotNull(cards.getOrNull(at - 1))).filter { it.kind == CardKind.POSTER }
+            .forEach { c -> prefetchWide(ctxForPrefetch, (wideOf(c.key).value ?: c.wide)?.let(::cardSized), wideSize) }
     }
 
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -223,7 +283,7 @@ fun NetflixRowsPage(
                                         val wide = (wideOf(c.key).value ?: c.wide)?.let(::cardSized)
                                         val card = remember(c, wide) { if (wide == c.wide) c else c.copy(wide = wide) }
                                         PosterExpandingCard(card, isFocused, isFocused && playing != null && playing == target?.key,
-                                            onB, onF, previewPlayer, isFocused && previewHasFrame)
+                                            onB, onF, previewPlayer, isFocused && previewHasFrame, wideSize)
                                     }
                                 }
                                 shelf.onShowAll?.let { all ->
@@ -267,8 +327,8 @@ fun NetflixRowsPage(
  */
 @Composable
 private fun PosterExpandingCard(c: RowCard, expanded: Boolean, playingHere: Boolean, onBounds: (Rect) -> Unit, onFocus: () -> Unit,
-                                livePlayer: androidx.media3.common.Player? = null, liveFrame: Boolean = false) {
-    var wideOk by remember(c.wide) { mutableStateOf(c.kind == CardKind.WIDE) }
+                                livePlayer: androidx.media3.common.Player? = null, liveFrame: Boolean = false, wideSize: androidx.compose.ui.unit.IntSize) {
+    var wideShown by remember { mutableStateOf(false) }
     val hasWide = c.wide != null && c.wide != c.poster
     // Netflix's step: the card is wide at once (animating the width re-measured the whole row every frame on weak
     // boxes); only its picture fades in for a moment, and every alpha here is read in the layer, not in composition.
@@ -293,11 +353,13 @@ private fun PosterExpandingCard(c: RowCard, expanded: Boolean, playingHere: Bool
                 }
                 CardKind.WIDE -> AsyncImage(c.wide ?: c.poster, c.title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 CardKind.POSTER -> {
-                    // No real wide picture: the poster's own colours fill the wide card behind the untouched poster.
-                    if (expanded && !(hasWide && wideOk)) AsyncImage(c.poster, null, Modifier.fillMaxSize().blur(24.dp), contentScale = ContentScale.Crop, alpha = .55f)
+                    // No real wide picture: the poster's own colours, blurred, fill the wide card behind the untouched
+                    // poster. Only where blur exists (Android 12+): older boxes drew a sharp, stretched copy of the
+                    // poster there, which then jumped to the real picture. They get the plain tile instead.
+                    if (expanded && !wideShown && CanBlur) AsyncImage(c.poster, null, Modifier.fillMaxSize().blur(24.dp), contentScale = ContentScale.Crop, alpha = .55f)
                     AsyncImage(c.poster ?: c.wide, c.title, Modifier.width(PosterW).fillMaxHeight(), contentScale = ContentScale.Crop)
-                    if (expanded && hasWide) AsyncImage(c.wide, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
-                        onSuccess = { st -> val sz = st.painter.intrinsicSize; wideOk = sz.width > 0f && sz.width / sz.height >= 1.6f })
+                    if (expanded && hasWide) WidePicture(c.wide, wideSize) { wideShown = it }
+                    else if (wideShown) wideShown = false
                 }
             }
             // Channels and continue-watching carry their name on the card (posters already show it in the art).

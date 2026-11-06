@@ -231,7 +231,12 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
         wantKey = null
         if (selectedCategory != null) return@LaunchedEffect
         if (billboardFocused) { val b = billboard ?: return@LaunchedEffect; delay(3_000); trailerFor(b)?.let { billboardBounds = liveBounds[0]; wantKey = it to true } }
-        else { val t = titles.firstOrNull { it.id == focusedId } ?: return@LaunchedEffect; delay(1_200); trailerFor(t)?.let { cardBounds = liveBounds[1]; wantKey = it to false } }
+        else {
+            val t = titles.firstOrNull { it.id == focusedId } ?: return@LaunchedEffect
+            // The YouTube page loads (paused) while you are still on the card; after the dwell only the video starts.
+            launch { trailerFor(t)?.let { k -> tv.nakash.ui.components.TrailerPlayer.warm(ctx, k) } }
+            delay(tv.nakash.ui.components.TrailerDwellMs); trailerFor(t)?.let { cardBounds = liveBounds[1]; wantKey = it to false }
+        }
     }
     target = wantKey?.let { (k, onBillboard) -> (if (onBillboard) billboardBounds else cardBounds)?.let { TrailerTarget(k, it.translate(-stageOrigin), if (onBillboard) 22f else 10f) } }
     val billboardPlaying = target != null && wantKey?.second == true && playingKey == target?.key
@@ -248,14 +253,17 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     // right after the short dwell instead of waiting for TMDB.
     LaunchedEffect(focusedShelf, shelves, tmdbKey) {
         val i = shelves.indexOfFirst { it.key == focusedShelf }
-        (listOfNotNull(billboard) + (shelves.getOrNull(i)?.items.orEmpty().take(10)) + (shelves.getOrNull(i + 1)?.items.orEmpty().take(3))).forEach { trailerFor(it) }
+        // Together, not one after another (the 8th card used to wait for the 7 before it).
+        (listOfNotNull(billboard) + (shelves.getOrNull(i)?.items.orEmpty().take(10)) + (shelves.getOrNull(i + 1)?.items.orEmpty().take(3))).forEach { t -> launch { trailerFor(t) } }
     }
-    // Only the next few cards (each prefetch is a full decode on a weak CPU; a whole row of them stuttered the slide).
+    // The cards next to the focused one, decoded in memory at the card's size: a step shows the picture at once.
+    // Only those few (each is a full decode on a weak CPU; a whole row of them stuttered browsing).
+    val wideSize = tv.nakash.ui.components.rememberPx(WideW, CardH)
     LaunchedEffect(focusedId, focusedShelf) {
         val items = shelves.firstOrNull { it.key == focusedShelf }?.items ?: return@LaunchedEffect
         val at = items.indexOfFirst { it.id == focusedId }.coerceAtLeast(0)
-        delay(150)
-        items.drop(at + 1).take(2).forEach { tv.nakash.ui.components.prefetchWide(ctx, wideOf(it)) }
+        delay(100)
+        (items.drop(at + 1).take(2) + listOfNotNull(items.getOrNull(at - 1))).forEach { tv.nakash.ui.components.prefetchWide(ctx, wideOf(it), wideSize) }
     }
     val manualScroll = remember { object : BringIntoViewSpec { override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float) = 0f } }
     val playFocus = remember { FocusRequester() }
@@ -334,7 +342,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                                         val expanded = rowFocused && focusedId == item.id
                                         Box((if (i == 0) Modifier.focusRequester(rowFirst) else Modifier).then(if (focusedShelf == shelf.key && focusedId == item.id) Modifier.focusRequester(cardFocus) else Modifier)) {
                                         val wide = wideOf(item)
-                                        ExpandingCard(remember(item, wide) { if (wide == item.backdrop) item else item.copy(backdrop = wide) }, expanded, playingHere = expanded && cardPlaying,
+                                        ExpandingCard(remember(item, wide) { if (wide == item.backdrop) item else item.copy(backdrop = wide) }, expanded, wideSize, playingHere = expanded && cardPlaying,
                                             onBounds = { if (expanded) { liveBounds[1] = it; if (wantKey?.second == false) cardBounds = it } },
                                             onFocus = { billboardFocused = false; focusedShelf = shelf.key; focusedId = item.id },
                                             click = { open(item) })
@@ -422,9 +430,9 @@ private fun BillboardButton(label: String, icon: androidx.compose.ui.graphics.ve
  * fades out and the video behind shows through.
  */
 @Composable
-private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, playingHere: Boolean, onBounds: (Rect) -> Unit, onFocus: () -> Unit, click: () -> Unit) {
+private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, wideSize: androidx.compose.ui.unit.IntSize, playingHere: Boolean, onBounds: (Rect) -> Unit, onFocus: () -> Unit, click: () -> Unit) {
     // The provider sometimes gives the poster (or a portrait image) as "backdrop": only a real landscape image is used wide.
-    var wideOk by remember(item.backdrop) { mutableStateOf(false) }
+    var wideOk by remember { mutableStateOf(false) }
     val hasWide = item.backdrop != null && item.backdrop != item.image
     val enter = tv.nakash.ui.components.rememberEnterAlpha(expanded)
     val imageAlpha by animateFloatAsState(if (playingHere) 0f else 1f, tween(450), label = "cardImage")
@@ -436,11 +444,12 @@ private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, playingHere: Bool
         border = ClickableSurfaceDefaults.border(focusedBorder = androidx.tv.material3.Border(BorderStroke(3.dp, Color.White), shape = shape))) {
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = imageAlpha * enter.value }.background(NakashColors.Tile), contentAlignment = Alignment.Center) {
             // No wide image: the poster's own colours, blurred, fill the wide card behind the untouched poster.
-            if (expanded && !(hasWide && wideOk)) AsyncImage(item.image, null, Modifier.fillMaxSize().blur(24.dp), contentScale = ContentScale.Crop, alpha = .55f)
+            // (Only where blur exists, Android 12+: older boxes drew a sharp stretched copy that then jumped to the real picture.)
+            if (expanded && !(hasWide && wideOk) && android.os.Build.VERSION.SDK_INT >= 31) AsyncImage(item.image, null, Modifier.fillMaxSize().blur(24.dp), contentScale = ContentScale.Crop, alpha = .55f)
             // The poster never stretches: it keeps its 2:3 size inside the wide card.
             AsyncImage(item.image ?: item.backdrop, item.title, Modifier.width(PosterW).fillMaxHeight(), contentScale = ContentScale.Crop)
-            if (expanded && hasWide) AsyncImage(item.backdrop, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
-                onSuccess = { st -> val sz = st.painter.intrinsicSize; wideOk = sz.width > 0f && sz.width / sz.height >= 1.6f })
+            if (expanded && hasWide) tv.nakash.ui.components.WidePicture(item.backdrop, wideSize) { wideOk = it }
+            else if (wideOk) wideOk = false
             if (expanded && hasWide && wideOk) Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.6f to Color.Transparent, 1f to Color.Black.copy(alpha = .6f))))
             item.progress?.let { p ->
                 androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
