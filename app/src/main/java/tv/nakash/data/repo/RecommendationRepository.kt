@@ -262,42 +262,26 @@ class RecommendationRepository @Inject constructor(
     private fun lovedKeys(h: Recommender.History) = h.ratings.filter { it.value >= 2 }.map { "${it.kind[0]}${it.refId}" }.toSet()
 
     /**
-     * Rows for the Movies or Series tab: the profile's own ("פרקים חדשים בסדרות שלך", "כי צפית ב…", film series to
-     * finish, its actors, categories and genres), what the world watches, then the themed rows (from our server when it
-     * lists them), the ones the profile keeps passing moved down.
+     * Rows for the Movies or Series tab: the profile's own, of that kind only (about [TAB_ROWS] drawn from a pool of
+     * kinds, see [personalRows]; new episodes first on the Series tab), what the world watches, then the themed rows
+     * (from our server when it lists them), the ones the profile keeps passing moved down. One row per title.
      */
     suspend fun discoverRows(profileId: String?, series: Boolean): List<IdRow> = withContext(Dispatchers.Default) {
         val lib = library()
         val out = mutableListOf<IdRow>()
         val h = profileId?.let { history(it) }
         val seen = h?.seenKeys().orEmpty()
-        val prefix = if (series) "series:" else "movie:"
         val kind = if (series) 's' else 'm'
         val seed = slotSeed(profileId)
         var affinity = emptyMap<String, Double>()
         val personalCats = mutableSetOf<String>()
         val dedupe = Deduper(); val idKey: (Int) -> String = { "$kind$it" }
         fun add(key: String, title: String, ids: List<Int>, min: Int = 6) { dedupe.take(ids, idKey, min = min)?.let { out += IdRow(key, title, it) } }
-        fun mine(items: List<Pair<Char, Int>>) = items.filter { it.first == kind }.map { it.second }
         val pool = if (series) lib.series.map { Curated.Item(it.id, it.year, it.genres, it.rating, null, it.categoryIds, it.cast) }
             else lib.movies.map { Curated.Item(it.id, it.year, it.genres, it.rating, it.runtimeMin, it.categoryIds, it.cast) }
-        if (h != null && !h.isEmpty) {
-            if (series) add("p_neweps", "פרקים חדשים בסדרות שלך", Recommender.newEpisodes(h, lib.series), min = 1)
-            becauseYouWatched(h, lib, seen, series, 3, seed).forEach { r -> add(r.key, r.title, r.items.map { it.second }, min = 4) }
-            if (!series) collections(h, lib, seen).take(2).forEachIndexed { i, r -> add("p_coll_$i", r.title, r.items.map { it.second }, min = 1) }
+        if (profileId != null && h != null && !h.isEmpty) {
             affinity = Recommender.genreAffinity(h, lib.movies, lib.series)
-            add("p_foryou", "מותאם בשבילך", Recommender.forYou(affinity, pool) { "$prefix$it" in seen })
-            Recommender.rotate(Recommender.topActors(h, lib.movies, lib.series, series), 2, seed).forEachIndexed { i, actor ->
-                add("p_actor_$i", "עוד עם $actor", mine(Recommender.byActor(actor, lib.movies, lib.series, seen)), min = 4)
-            }
-            val cats = if (series) lib.seriesCats else lib.movieCats
-            Recommender.rotate(Recommender.topCategories(h, lib.movies, lib.series, series).filter { cats[it]?.let(Recommender::tasteCategory) == true }, 2, seed).forEachIndexed { i, cat ->
-                personalCats += cats.getValue(cat)
-                add("p_cat_$i", Recommender.categoryTitle(cats.getValue(cat)), mine(Recommender.byCategory(cat, affinity, lib.movies, lib.series, seen)))
-            }
-            Recommender.rotate(affinity.entries.filter { it.value > 0 }.sortedByDescending { it.value }.map { it.key }, 2, seed).forEachIndexed { i, genre ->
-                add("p_genre_$i", "$genre בשבילך", Curated.genreRow(pool, setOf(genre), perRow = 40) { "$prefix$it" in seen })
-            }
+            personalRows(profileId, h, lib, seen, series, affinity, seed, dedupe, personalCats).forEach { out += it }
         }
         // What the world watches this week, kept to what the provider has.
         withTimeoutOrNull(8_000) { tmdb.trending(series) }?.let { trend ->
@@ -315,6 +299,115 @@ class RecommendationRepository @Inject constructor(
         val shown = Recommender.pickWeighted(themed, THEMES_SHOWN, seed) { weights[it.key] ?: 1.0 }
         stats.order(profileId, shown) { it.key }.forEach { add(it.key, it.title, it.ids) }
         out
+    }
+
+    /**
+     * The personal rows of the Movies or Series tab, of that kind only: like Home, about [TAB_ROWS] of a pool of kinds,
+     * drawn anew each time (the heavier likelier, the ones shown on the tab's last visits less), titles drawn from the
+     * top of each ranking, the rows mixed (new episodes always first). The tab keeps its own memory, apart from Home.
+     */
+    private suspend fun personalRows(profileId: String, h: Recommender.History, lib: Library, seen: Set<String>, series: Boolean,
+                                     affinity: Map<String, Double>, slot: Long, dedupe: Deduper, personalCats: MutableSet<String>): List<IdRow> {
+        val kind = if (series) 's' else 'm'
+        val memory = "$profileId#tab_$kind"
+        val recent = shown.recent(memory)
+        val seed = slot + shown.draws(memory) * 7_919L + kind.code
+        val ms = if (series) emptyList() else lib.movies
+        val ss = if (series) lib.series else emptyList()
+        val cats = if (series) lib.seriesCats else lib.movieCats
+        val now = java.time.LocalDateTime.now(); val year = now.year
+        val idKey: (Int) -> String = { "$kind$it" }
+        val rows = mutableListOf<IdRow>(); val topicsShown = mutableListOf<String>()
+        var kindNow = ""
+        fun ids(items: List<Pair<Char, Int>>) = items.filter { it.first == kind }.map { it.second }
+        fun add(key: String, title: String, items: List<Int>, min: Int = 6, topic: String? = null, fresh: Boolean = true) {
+            val list = if (fresh) Recommender.freshen(items, seed + key.hashCode()) { idKey(it) in recent } else items
+            dedupe.take(list, idKey, min = min)?.let { rows += IdRow(key, title, it); topicsShown += "t:kind:$kindNow"; topic?.let(topicsShown::add) }
+        }
+        fun topics(k: String, ranked: List<String>, count: Int) = Recommender.drawRanked(ranked, count, seed + k.hashCode()) { "t:$k:$it" in recent }
+
+        if (series) add("p_neweps", "פרקים חדשים בסדרות שלך", Recommender.newEpisodes(h, lib.series), min = 1, fresh = false)
+        val mood = if (series) Recommender.Mood.BINGE else Recommender.mood(now).takeIf { it != Recommender.Mood.BINGE }
+        val kinds = listOfNotNull(
+            Kind("because", 3.0) {
+                val st = Recommender.drawRanked(Recommender.seeds(h, lib.movies, lib.series).filter { (it is SeriesLite) == series }.take(8), 5, seed + 11) { "t:because:${titleKey(it)}" in recent }
+                becauseRows(st, lib, seen, lovedKeys(h), 2).forEachIndexed { i, r -> add("because_$i", r.title, r.items.map { it.second }, min = 4, topic = r.topic) }
+            },
+            Kind("saved", 1.5) {
+                val favs = h.favorites.filter { it.kind == (if (series) "series" else "movie") }.sortedByDescending { it.addedAt }
+                    .mapNotNull { f -> f.refId.toIntOrNull()?.let { id -> if (series) lib.series.firstOrNull { it.id == id } else lib.movies.firstOrNull { it.id == id } } }.take(8)
+                val st = Recommender.drawRanked(favs, 3, seed + 17) { "t:saved:${titleKey(it)}" in recent }
+                becauseRows(st, lib, seen, emptySet(), 1, saved = true).forEach { r -> add("p_saved", r.title, r.items.map { it.second }, min = 4, topic = r.topic) }
+            },
+            if (!series) Kind("coll", 2.5) { collections(h, lib, seen).take(2).forEachIndexed { i, r -> add("p_coll_$i", r.title, r.items.map { it.second }, min = 1, fresh = false) } } else null,
+            if (series) Kind("left", 2.5) { add("p_left", "סדרות שעזבת באמצע", Recommender.leftSeries(h, lib.series), min = 2, fresh = false) }
+            else Kind("started", 2.5) { add("p_started", "סרטים שהתחלת ולא סיימת", Recommender.leftMovies(h, lib.movies), min = 2, fresh = false) },
+            if (series) Kind("short", if (Recommender.weekendNear(now)) 2.5 else 1.5) {
+                val mini = if (tmdb.enabled) withTimeoutOrNull(6_000) { LibraryMatch.match(tmdb.miniseries(), lib.series, { it.title }, { it.year }).map { it.id }.toSet() }.orEmpty() else emptySet()
+                val totals = catalog.seasonTotals().associate { it.seriesId to (it.seasons to it.episodes) }
+                add("p_short", if (Recommender.weekendNear(now)) "סדרות קצרות לסופ״ש" else "סדרות קצרות לכמה ערבים", ids(Recommender.shortSeries(lib.series, mini, totals, lib.seriesCats, affinity, seen)))
+            } else null,
+            Kind("foryou", 2.0) {
+                val pool = if (series) lib.series.map { Curated.Item(it.id, it.year, it.genres, it.rating, null, it.categoryIds, it.cast) }
+                    else lib.movies.map { Curated.Item(it.id, it.year, it.genres, it.rating, it.runtimeMin, it.categoryIds, it.cast) }
+                add("p_foryou", "מותאם בשבילך", Recommender.forYou(affinity, pool) { (if (series) "series:$it" else "movie:$it") in seen })
+            },
+            Kind("new", 1.5) { add("p_new", "חדש בשבילך", ids(Recommender.newForYou(affinity, ms, ss, seen)), min = 4) },
+            Kind("fresh", 1.5) { add("p_fresh", "טריים מ־$year", ids(Recommender.freshReleases(affinity, ms, ss, seen, year))) },
+            Kind("actor", 2.0) {
+                topics("actor", Recommender.topActors(h, lib.movies, lib.series, series), 1).forEach { a -> add("p_actor_0", "עוד עם $a", ids(Recommender.byActor(a, ms, ss, seen)), min = 4, topic = "t:actor:$a") }
+            },
+            Kind("stars", 1.2) { add("p_stars", "השחקנים שחוזרים אצלך", ids(Recommender.byActors(Recommender.topActors(h, lib.movies, lib.series, series).take(8), ms, ss, seen))) },
+            if (!series) Kind("director", 1.5) {
+                topics("director", Recommender.topDirectors(h, lib.movies), 1).forEach { d -> add("p_director", "עוד מהבמאי $d", ids(Recommender.byDirector(d, lib.movies, seen)), min = 3, topic = "t:director:$d") }
+            } else null,
+            Kind("cat", 1.5) {
+                topics("cat", Recommender.topCategories(h, lib.movies, lib.series, series).filter { cats[it]?.let(Recommender::tasteCategory) == true }, 1).forEach { cat ->
+                    personalCats += cats.getValue(cat)
+                    add("p_cat_0", Recommender.categoryTitle(cats.getValue(cat)), ids(Recommender.byCategory(cat, affinity, ms, ss, seen)), topic = "t:cat:$cat")
+                }
+            },
+            Kind("genre", 2.0) {
+                topics("genre", affinity.entries.filter { it.value > 0 }.sortedByDescending { it.value }.map { it.key }, 1).forEach { g ->
+                    add("p_genre_0", "$g בשבילך", ids(Recommender.byGenre(g, ms, ss, seen)), topic = "t:genre:$g")
+                }
+            },
+            Kind("combo", 1.5) {
+                topics("combo", Recommender.genrePairs(affinity, ms, ss, seen), 1).forEach { pair ->
+                    val (a, b) = pair.split('+', limit = 2)
+                    add("p_combo", "$a + $b", ids(Recommender.byGenres(setOf(a, b), ms, ss, seen)), topic = "t:combo:$pair")
+                }
+            },
+            Kind("decade", 1.2) { Recommender.favoriteDecade(h, ms, ss, year)?.let { d -> add("p_decade", "${Recommender.decadeTitle(d)} שלך", ids(Recommender.byDecade(d, affinity, ms, ss, seen))) } },
+            Kind("gems", 1.5) { add("p_gems", "יהלומים נסתרים בשבילך", ids(Recommender.hiddenGems(affinity, ms, ss, seen, year))) },
+            Kind("classics", 1.2) { add("p_classics", "קלאסיקות שעוד לא ראית", ids(Recommender.classics(affinity, ms, ss, seen))) },
+            Kind("top", 1.0) { add("p_top", "הכי מדורגים שעוד לא ראית", ids(Recommender.topRated(affinity, ms, ss, seen))) },
+            Kind("wild", 1.3) {
+                topics("wild", Recommender.untriedGenres(affinity, ms, ss, seen), 1).forEach { g ->
+                    add("p_wild", "משהו אחר: $g", ids(Recommender.byGenre(g, ms, ss, seen, minRating = 7.2)), topic = "t:wild:$g")
+                }
+            },
+            Kind("sampler", 1.0) { add("p_sampler", "טעימה מכל ז׳אנר", ids(Recommender.sampler(ms, ss, seen)), fresh = false) },
+            Kind("season", 1.3) { val sz = Recommender.seasonal(now.toLocalDate()); add("p_season", sz.title, ids(Recommender.bySeason(sz, affinity, ms, ss, seen)), topic = "t:season:${sz.key}") },
+            mood?.let { md ->
+                Kind("mood", 1.5) {
+                    val title = when (md) { Recommender.Mood.NIGHT -> "לפני השינה"; Recommender.Mood.WEEKEND -> "סרט ארוך לסופ״ש"; Recommender.Mood.BINGE -> "סדרות לבינג׳" }
+                    add("p_mood", title, ids(Recommender.forMood(md, affinity, ms, ss, seen)))
+                }
+            },
+        )
+        val drawn = Recommender.weightedOrder(kinds, seed + 13) { it.weight * if ("t:kind:${it.id}" in recent) 0.35 else 1.0 }
+        var next = 0
+        fun count() = rows.count { it.key != "p_neweps" }
+        while (next < drawn.size && count() < TAB_ROWS) {
+            val batch = drawn.subList(next, minOf(drawn.size, next + TAB_ROWS - count())).toSet()
+            next += batch.size
+            for (k in kinds) if (k in batch) { kindNow = k.id; try { k.build() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { } }
+        }
+        val (top, rest) = rows.partition { it.key == "p_neweps" }
+        val ordered = top + Recommender.mixOrder(rest, seed + 5)
+        shown.record(memory, ordered.flatMap { r -> r.ids.map(idKey) } + topicsShown)
+        return ordered
     }
 
     /**
@@ -343,7 +436,7 @@ class RecommendationRepository @Inject constructor(
         }
     }
 
-    private companion object { const val THEMES_SHOWN = 9; const val HOME_ROWS = 10 }
+    private companion object { const val THEMES_SHOWN = 9; const val HOME_ROWS = 10; const val TAB_ROWS = 9 }
 
     /** A kind of Home row: how likely it is drawn, and how it adds its row (or none, when it has too little). */
     private class Kind(val id: String, val weight: Double, val build: suspend () -> Unit)
@@ -886,6 +979,21 @@ object Recommender {
             val tagged = s.id in mini || s.categoryIds.split(',').any { id -> categoryNames[id]?.let(MINI::containsMatchIn) == true }
             "series:${s.id}" !in seen && (t == null || t.second <= 12) && (known || tagged) && ((s.rating ?: 0.0) >= 6.8 || (s.rating == null && tagged))
         }.sortedByDescending { fit(it.genres, it.rating ?: 7.0, it.year, affinity) }.take(limit).map { 's' to it.id }.toList()
+
+    /**
+     * Movies the profile stopped between 15% and 90% (past the first minutes, so not ones it left because it did not
+     * like them), 10 days to a year ago, that fell out of "המשך צפייה" (its 12 latest). Latest first.
+     */
+    fun leftMovies(h: History, movies: List<MovieLite>, now: Long = System.currentTimeMillis()): List<Int> {
+        val inContinue = h.progress.filter { !it.completed && it.kind == "movie" }.sortedByDescending { it.updatedAt }.take(12).map { it.refId }.toSet()
+        val known = movies.mapTo(HashSet()) { it.id }
+        val disliked = h.disliked
+        return h.progress.filter { p ->
+            val id = p.refId.toIntOrNull()
+            p.kind == "movie" && !p.completed && id != null && id in known && p.refId !in inContinue && "movie:${p.refId}" !in disliked &&
+                p.durationMs > 0 && p.positionMs in (p.durationMs * 0.15).toLong()..(p.durationMs * 0.9).toLong() && now - p.updatedAt in 10L * 86_400_000..365L * 86_400_000
+        }.sortedByDescending { it.updatedAt }.mapNotNull { it.refId.toIntOrNull() }
+    }
 
     /** Thursday evening to Saturday: when a short series fits best. */
     fun weekendNear(now: java.time.LocalDateTime) = now.dayOfWeek == java.time.DayOfWeek.FRIDAY || now.dayOfWeek == java.time.DayOfWeek.SATURDAY ||

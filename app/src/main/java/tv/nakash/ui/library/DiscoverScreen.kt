@@ -155,7 +155,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                 // Personal first ("כי צפית ב…", "מותאם בשבילך", the profile's genres), then new, trending, top rated and the themes.
                 // New episodes and the rest of a film series are worth a row even with one or two titles.
                 fun smartShelf(r: tv.nakash.data.repo.IdRow) = r.ids.mapNotNull { indexed[it] }.take(20)
-                    .takeIf { it.size >= (if (r.key == "p_neweps" || r.key.startsWith("p_coll")) 1 else 4) }?.let { add(Shelf(r.key, r.title, it)) }
+                    .takeIf { it.size >= when { r.key == "p_neweps" || r.key.startsWith("p_coll") -> 1; r.key == "p_left" || r.key == "p_started" -> 2; else -> 4 } }?.let { add(Shelf(r.key, r.title, it)) }
                 smart.filter { it.key.startsWith("because") || it.key.startsWith("p_") }.forEach(::smartShelf)
                 if (titles.isNotEmpty()) add(Shelf("new", if (seriesMode) "פרקים חדשים" else "חדש בשירות", titles.take(12)))
                 smart.filter { it.key == "trend" }.forEach(::smartShelf)
