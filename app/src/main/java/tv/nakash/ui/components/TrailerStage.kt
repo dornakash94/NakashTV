@@ -55,7 +55,7 @@ object TrailerPlayer {
     internal var releasedKey: String? = null
     private var currentKey: String? = null
     private const val REFERER = "https://github.com/dornakash94/NakashTV"
-    private fun embed(key: String) = "https://www.youtube.com/embed/$key?autoplay=1&controls=0&playsinline=1&rel=0&iv_load_policy=3&fs=0&disablekb=1&modestbranding=1&cc_load_policy=0&start=4&enablejsapi=1"
+    private fun embed(key: String, autoplay: Boolean = true) = "https://www.youtube.com/embed/$key?autoplay=${if (autoplay) 1 else 0}&controls=0&playsinline=1&rel=0&iv_load_policy=3&fs=0&disablekb=1&modestbranding=1&cc_load_policy=0&start=4&enablejsapi=1"
 
     /**
      * Null when this device can't make a WebView (no WebView package, or it is being updated right now — common on
@@ -72,6 +72,7 @@ object TrailerPlayer {
             override fun onPageFinished(view: WebView, url: String?) {
                 if (url?.contains("youtube.com/embed/") != true) return
                 pageReady = true
+                trace("page ready after ${since()} ms")
                 view.evaluateJavascript(HOOK, null)
                 pending?.let { k -> pending = null; load(k) }
             }
@@ -84,7 +85,7 @@ object TrailerPlayer {
             }
         }
         addJavascriptInterface(object {
-            @JavascriptInterface fun playing(id: String) { main.post { playing.value = id } }
+            @JavascriptInterface fun playing(id: String) { main.post { trace("playing $id after ${since()} ms"); playing.value = id } }
             @JavascriptInterface fun stopped() { main.post { playing.value = null } }
         }, "Android")
         web = this
@@ -95,14 +96,38 @@ object TrailerPlayer {
     private val releaseLater = Runnable { release() }
     private var parked = false
 
-    /** A screen let go of the player: stop the page's scripts now, free the renderer if nobody takes it within 8 s. */
+    /**
+     * A screen let go of the player: stop the page's scripts now, free the renderer if nobody takes it within 30 s
+     * (long enough to look at a title and come back without paying the page load again; 8 s almost never was).
+     */
     fun park() {
         pause()
         val w = web ?: return
         runCatching { w.onPause(); w.pauseTimers() }
         parked = true
-        main.removeCallbacks(releaseLater); main.postDelayed(releaseLater, 8_000)
+        main.removeCallbacks(releaseLater); main.postDelayed(releaseLater, 30_000)
     }
+
+    /**
+     * Loads YouTube's player page now, paused, with [key] cued, while the viewer is still on the card. Loading that
+     * page (and starting the web renderer) is most of a first trailer's wait on a TV box; once it is up, the trailer
+     * itself is only a video swap in [load]. Does nothing when the page is already there or loading.
+     */
+    fun warm(ctx: android.content.Context, key: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { main.post { warm(ctx, key) }; return }
+        if (key == releasedKey) return
+        val fresh = web == null
+        val w = view(ctx) ?: return
+        if (!fresh && (pageReady || w.url != null)) return
+        loadStarted = android.os.SystemClock.elapsedRealtime()
+        trace("warm $key")
+        w.loadUrl(embed(key, autoplay = false), mapOf("Referer" to REFERER))
+    }
+
+    /** Debug builds: where a trailer's time goes (adb logcat -s NakashTrailer). */
+    internal fun trace(msg: String) { if (tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashTrailer", msg) }
+    private var loadStarted = 0L
+    private fun since() = android.os.SystemClock.elapsedRealtime() - loadStarted
     private fun unpark(w: WebView) {
         main.removeCallbacks(releaseLater)
         if (parked) { parked = false; runCatching { w.onResume(); w.resumeTimers() } }
@@ -113,9 +138,12 @@ object TrailerPlayer {
         unpark(w)
         currentKey = key; releasedKey = null
         playing.value = null
+        loadStarted = android.os.SystemClock.elapsedRealtime()
+        trace("load $key ${if (pageReady) "in ready page" else "cold"}")
         if (!pageReady) {
-            if (w.url == null || pending == null) w.loadUrl(embed(key), mapOf("Referer" to REFERER))
-            pending = null
+            // The page is still loading (warmed a moment ago): this video starts as soon as it is up, instead of
+            // throwing that load away and starting over.
+            if (w.url == null) w.loadUrl(embed(key), mapOf("Referer" to REFERER)) else pending = key
             return
         }
         w.evaluateJavascript("(function(){var p=document.getElementById('movie_player');if(p&&p.loadVideoById){window.__want='$key';p.loadVideoById({videoId:'$key',startSeconds:4});return 1}return 0})()") { r ->
@@ -137,7 +165,7 @@ object TrailerPlayer {
         runCatching { (w.parent as? ViewGroup)?.removeView(w); w.stopLoading(); w.loadUrl("about:blank"); w.destroy() }
         generation.value++
     }
-    fun pause() { playing.value = null; web?.evaluateJavascript("try{document.getElementById('movie_player').pauseVideo()}catch(e){}", null) }
+    fun pause() { pending = null; playing.value = null; web?.evaluateJavascript("try{document.getElementById('movie_player').pauseVideo()}catch(e){}", null) }
 
     /**
      * Injected into YouTube's own embed page: hides the player's overlays (title bar, pause/play bezel, controls,
