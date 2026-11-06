@@ -101,3 +101,9 @@ The father's "לא הצלחנו להתחיל את הצפייה" on המחתרת 
 Stability on weak boxes: no start-up crash on a broken Keystore; the first sync no longer reads whole catalog responses into memory and two full syncs no longer run together. Rows move like Netflix: an instant step inside a row and one 300 ms slide between rows (Home, Live, Movies, Series).
 
 Home recommendations change every visit: a pool of 23 row kinds with about 10 drawn per visit (seeded, so a visit is stable while it lasts), reasons beyond "כי צפית ב…" (more from the director, the time of year, short series for the weekend, and others), and less repetition of the same titles across rows and visits.
+
+## Release 0.5.4 (2026-11-06)
+
+From the owner's look at 0.5.3 on his box. A card widening on Home jumped (a stretched sharp copy of the poster on boxes without blur, then the wide picture popping in): the wide pictures of the cards next to the focused one are now decoded in memory at the card's exact size and memory key, so a step shows its picture in the same frame; one that has to load fades in over the poster, and when a sharper picture replaces it the old one stays until the new one is up. Boxes before Android 12 (no blur) show the plain tile instead of the stretched poster. Trailers start sooner: YouTube's player page is loaded paused while the viewer is still on the card (that page, not the video, was most of the wait), trailer lookups for the nearest cards start together, the dwell before a trailer is 1 s, and the page is kept 30 s after leaving a screen instead of 8 s. Not measured on a box.
+
+The Movies and Series tabs draw their personal rows from a pool of kinds like Home, each tab with its own kind of title only (new episodes first on Series; "סדרות שעזבת באמצע", "סרטים שהתחלת ולא סיימת", short series, collections, because-you-watched and saved), with the tab's own memory of what it showed.
