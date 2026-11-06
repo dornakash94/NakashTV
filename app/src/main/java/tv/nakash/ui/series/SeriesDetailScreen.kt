@@ -237,8 +237,10 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
         val recs=tmdb?.similar.orEmpty()
         if(recs.isEmpty()) return@produceState
         value=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            if(series) Pair(emptyList(),LibraryMatch.match(recs,vm.catalog.recentlyUpdatedSeries(Int.MAX_VALUE).first(),{it.title},{it.year}).filter {it.id!=id}.take(15))
-            else Pair(LibraryMatch.match(recs,vm.catalog.newestMovies(Int.MAX_VALUE).first(),{it.title},{it.year}).filter {it.id!=id}.take(15),emptyList())
+            // Matched on the light columns, then only the matches read in full: reading every title with its plot and
+            // cast on each detail page was tens of MB at once on a weak box.
+            if(series) Pair(emptyList(),vm.catalog.seriesByIds(LibraryMatch.match(recs,vm.catalog.seriesLite(),{it.title},{it.year}).map {it.id}.filter {it!=id}.take(15)))
+            else Pair(vm.catalog.moviesByIds(LibraryMatch.match(recs,vm.catalog.movieLite(),{it.title},{it.year}).map {it.id}.filter {it!=id}.take(15)),emptyList())
         }
     }
     val similarMovies=similarLists.first

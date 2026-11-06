@@ -59,7 +59,8 @@ class EpgRepository @Inject constructor(
      * Full XMLTV import, streamed with XmlPullParser (the file can be large). Keeps 7 days ahead, 32 back.
      * Filler detection runs per channel/day after parsing.
      */
-    suspend fun syncXmltv() = withContext(Dispatchers.IO) {
+    private val xmltvLock = kotlinx.coroutines.sync.Mutex()
+    suspend fun syncXmltv() = CatalogRepository.single(xmltvLock) { withContext(Dispatchers.IO) {
         val url = api.urls().xmltv()
         val resp = client.newCall(Request.Builder().url(url).build()).execute()
         if (!resp.isSuccessful) { resp.close(); error("xmltv ${resp.code}") }
@@ -113,7 +114,7 @@ class EpgRepository @Inject constructor(
             markFiller(names, perDay)
         }
         epgDao.purgeBefore(now() - 33 * 86400)
-    }
+    } }
 
     private suspend fun markFiller(names: Map<String, String>, perDay: Map<String, MutableMap<String, Int>>) {
         // Filler = title equals channel name, or a ≥3h title repeating ≥4 times a day. Cheap second pass over today±1.

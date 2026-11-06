@@ -2,6 +2,8 @@ package tv.nakash.data.repo
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import tv.nakash.data.local.CategoryEntity
 import tv.nakash.data.local.ChannelDao
@@ -64,11 +66,15 @@ class CatalogRepository @Inject constructor(
     data class SearchResult(val channels: List<ChannelEntity>, val movies: List<MovieEntity>, val series: List<SeriesEntity>)
 
     // ---------- sync (called by WorkManager / first login) ----------
-    suspend fun syncLive() = withContext(Dispatchers.IO) {
+    val signedIn get() = api.signedIn
+    private val liveLock = Mutex(); private val vodLock = Mutex(); private val seriesLock = Mutex()
+
+    suspend fun syncLive() = single(liveLock) { withContext(Dispatchers.IO) {
         val cats = api.api().liveCategories()
         val streams = api.api().liveStreams()
-        val catEntities = cats.mapIndexed { i, c ->
-            val id = c.categoryId.toInt()
+        // A category without a numeric id is skipped, not a reason to fail the whole sync.
+        val catEntities = cats.mapIndexedNotNull { i, c ->
+            val id = c.categoryId?.trim()?.toIntOrNull() ?: return@mapIndexedNotNull null
             CategoryEntity(id, "live", Normalizer.categoryName(c.categoryName), c.categoryName, order = PINNED_LIVE_CATEGORIES[id] ?: (100 + i), pinned = id in PINNED_LIVE_CATEGORIES)
         }
         val grouped = ChannelGrouper.group(streams)
@@ -81,11 +87,11 @@ class CatalogRepository @Inject constructor(
         }
         val srcs = grouped.flatMap { g -> g.sources.mapIndexed { r, s -> ChannelSourceEntity(s.streamId, g.primary.streamId, s.kind.name, r, s.tvArchive, s.archiveDays) } }
         channelDao.replaceLive(catEntities, chans, srcs)
-    }
+    } }
 
-    suspend fun syncVod() = withContext(Dispatchers.IO) {
+    suspend fun syncVod() = single(vodLock) { withContext(Dispatchers.IO) {
         val cats = api.api().vodCategories()
-        channelDao.upsertCategories(cats.mapIndexed { i, c -> CategoryEntity(c.categoryId.toInt(), "vod", Normalizer.categoryName(c.categoryName), c.categoryName, i) })
+        channelDao.upsertCategories(cats.mapIndexedNotNull { i, c -> CategoryEntity(c.categoryId?.trim()?.toIntOrNull() ?: return@mapIndexedNotNull null, "vod", Normalizer.categoryName(c.categoryName), c.categoryName, i) })
         val movies = api.api().vodStreams().map { m ->
             MovieEntity(
                 id = m.streamId, title = m.title ?: Normalizer.titleWithoutYear(m.name), year = m.year?.toIntOrNull(),
@@ -100,11 +106,11 @@ class CatalogRepository @Inject constructor(
         val enriched = vodDao.enrichedMovies().associateBy { it.id }
         val merged = movies.map { m -> enriched[m.id]?.let { old -> m.copy(backdrop = old.backdrop, durationSec = old.durationSec, country = old.country, tmdbId = old.tmdbId, infoLoaded = true, trailer = m.trailer ?: old.trailer) } ?: m }
         vodDao.upsert(merged)
-    }
+    } }
 
-    suspend fun syncSeries() = withContext(Dispatchers.IO) {
+    suspend fun syncSeries() = single(seriesLock) { withContext(Dispatchers.IO) {
         val cats = api.api().seriesCategories()
-        channelDao.upsertCategories(cats.mapIndexed { i,c -> CategoryEntity(c.categoryId.toInt(), "series",Normalizer.categoryName(c.categoryName),c.categoryName,i) })
+        channelDao.upsertCategories(cats.mapIndexedNotNull { i,c -> CategoryEntity(c.categoryId?.trim()?.toIntOrNull() ?: return@mapIndexedNotNull null, "series",Normalizer.categoryName(c.categoryName),c.categoryName,i) })
         val list = api.api().series().map { s ->
             val cover = Normalizer.imageUrl(s.cover)
             SeriesEntity(
@@ -117,7 +123,7 @@ class CatalogRepository @Inject constructor(
         val cachedDetails = vodDao.detailedSeries().associateBy { it.id }
         val merged = list.map { s -> cachedDetails[s.id]?.let { old -> s.copy(detailLoadedAt = old.detailLoadedAt) } ?: s }
         vodDao.upsertSeries(merged)
-    }
+    } }
 
     /** Detail page: backdrop, tmdb id, real duration, country. Cached for a week. */
     suspend fun ensureMovieInfo(id: Int) = withContext(Dispatchers.IO) {
@@ -155,5 +161,17 @@ class CatalogRepository @Inject constructor(
         vodDao.upsertSeasons(seasons + extra)
         vodDao.upsertEpisodes(eps)
         vodDao.upsertSeries(s.copy(detailLoadedAt = System.currentTimeMillis()))
+    }
+
+    companion object {
+        /**
+         * Runs [block] unless the same sync is already running; then it waits for that one and returns. After the
+         * first login the sign-in screen and the background worker both started a full catalog sync: two copies of
+         * the whole VOD list in memory at once on a weak box, and the same work done twice.
+         */
+        internal suspend fun single(lock: Mutex, block: suspend () -> Unit) {
+            if (!lock.tryLock()) { lock.withLock { }; return }
+            try { block() } finally { lock.unlock() }
+        }
     }
 }

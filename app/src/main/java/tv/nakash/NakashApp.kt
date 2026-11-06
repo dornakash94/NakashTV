@@ -20,7 +20,7 @@ class NakashApp : Application(), Configuration.Provider, SingletonImageLoader.Fa
     @Inject lateinit var workerFactory: HiltWorkerFactory
     @Inject lateinit var okHttp: OkHttpClient
 
-    override fun onCreate() { super.onCreate(); SyncWorker.schedule(this) }
+    override fun onCreate() { super.onCreate(); CrashLog.install(this); SyncWorker.schedule(this) }
     override val workManagerConfiguration get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
 
     /** Posters/logos go through the same OkHttp (fixed User-Agent), 512 MB disk cache. */

@@ -57,7 +57,11 @@ object TrailerPlayer {
     private const val REFERER = "https://github.com/dornakash94/NakashTV"
     private fun embed(key: String) = "https://www.youtube.com/embed/$key?autoplay=1&controls=0&playsinline=1&rel=0&iv_load_policy=3&fs=0&disablekb=1&modestbranding=1&cc_load_policy=0&start=4&enablejsapi=1"
 
-    fun view(ctx: android.content.Context): WebView = web ?: WebView(ctx.applicationContext).apply {
+    /**
+     * Null when this device can't make a WebView (no WebView package, or it is being updated right now — common on
+     * TV boxes): the screen then simply shows no trailer instead of crashing.
+     */
+    fun view(ctx: android.content.Context): WebView? = web ?: runCatching { WebView(ctx.applicationContext) }.getOrNull()?.apply {
         val main = Handler(Looper.getMainLooper())
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         setBackgroundColor(Color.BLACK)

@@ -47,7 +47,7 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         stopped = true; stoppedAt = System.currentTimeMillis()
         playback.background(); preview.background()
-        profileSync.syncOnLeave(this)
+        profileSync.syncOnLeave(this); profileSync.pause()
         tv.nakash.ui.components.TrailerPlayer.release()
         coil3.SingletonImageLoader.get(this).memoryCache?.clear()
     }
@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
         if (!stopped) return
         stopped = false
         recs.refreshIfStale(System.currentTimeMillis() - stoppedAt)
+        if (profiles.current.value != null) profileSync.start()
         playback.surfaceEpoch.value++
         playback.foreground(); preview.foreground()
     }

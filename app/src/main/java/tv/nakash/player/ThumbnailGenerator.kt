@@ -66,6 +66,10 @@ class ThumbnailGenerator @Inject constructor(@ApplicationContext ctx:Context) {
         } catch(_:Exception) {finish(false)}
     }
     fun stop() {latest=null;requests.trySend(null)}
+    /** getScaledFrameAtTime exists from Android 8.1 (API 27); older boxes threw NoSuchMethodError, which ended the app. */
+    private fun frameAt(r:MediaMetadataRetriever,us:Long):Bitmap? =
+        if(android.os.Build.VERSION.SDK_INT>=27) r.getScaledFrameAtTime(us,MediaMetadataRetriever.OPTION_CLOSEST_SYNC,320,180)
+        else r.getFrameAtTime(us,MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let {full -> Bitmap.createScaledBitmap(full,320,180,true).also {if(it!==full) full.recycle()}}
     init {
         scope.launch {
             var retriever:MediaMetadataRetriever?=null
@@ -84,7 +88,7 @@ class ThumbnailGenerator @Inject constructor(@ApplicationContext ctx:Context) {
                             if(latest!=target) break
                             val second=(target.seconds+offset*STEP_SEC).coerceIn(0,target.duration-1)/STEP_SEC*STEP_SEC
                             if(existing(target.key,second)!=null) continue
-                            val bitmap=retriever?.getScaledFrameAtTime(second*1_000_000,MediaMetadataRetriever.OPTION_CLOSEST_SYNC,320,180) ?: continue
+                            val bitmap=retriever?.let {frameAt(it,second*1_000_000)} ?: continue
                             try {
                                 val file=frameFile(target.key,second)
                                 val temp=File(file.parentFile,file.name+".tmp")

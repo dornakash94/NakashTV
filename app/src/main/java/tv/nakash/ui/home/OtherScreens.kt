@@ -141,6 +141,9 @@ fun SettingsScreen(vm:SettingsViewModel=hiltViewModel()) {
                     SettingRow("החלפת פרופיל", vm.profiles.current.collectAsState().value?.name ?: "") {vm.profiles.signOutProfile()}
                     SettingRow("התנתקות","פרטי הכניסה, הרשימה והיסטוריית הצפייה במכשיר יימחקו",enabled=!busy) {confirm=true}
                     Text("NakashTV ${tv.nakash.BuildConfig.VERSION_NAME} · לצפייה על המסך הגדול",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(start=16.dp,top=14.dp))
+                    val ctx=androidx.compose.ui.platform.LocalContext.current
+                    val crash=remember {tv.nakash.CrashLog.summary(ctx)}
+                    crash?.let {Text("קריסה אחרונה: $it",color=NakashColors.Dim,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(start=16.dp,top=6.dp))}
                 }
             }
         }
