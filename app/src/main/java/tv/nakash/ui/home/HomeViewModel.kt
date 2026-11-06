@@ -49,7 +49,7 @@ class HomeViewModel @Inject constructor(
     profiles: tv.nakash.data.profile.ProfileStore,
 ) : ViewModel() {
 
-    /** The profile's personal rows ("כי צפית ב…", "חדש בשבילך", its genres); Home is rebuilt per profile. */
+    /** The profile's personal rows ("כי צפית ב…", hidden gems, trending, its genres…), a new mix per draw; Home is rebuilt per profile. */
     private val recRows = MutableStateFlow<List<tv.nakash.data.repo.RecRow>>(emptyList())
     init {
         // After Home has drawn its first rows, so the personal ones never hold up the screen.
@@ -99,15 +99,15 @@ class HomeViewModel @Inject constructor(
             }
             if (continued.isNotEmpty()) add(HomeRow("continue", "המשך צפייה", items = continued))
             add(HomeRow("now", if (hasFavs) "הערוצים שלי" else "עכשיו בשידור", if (hasFavs) "המועדפים שלך · לחיצה ארוכה על ערוץ מוסיפה" else "ישראל · לחיצה ארוכה על ערוץ מוסיפה למועדפים", favs))
+            // The personal rows come already mixed (a new order every draw): two of them, "הרשימה שלי", two more,
+            // "חדש בשירות", then the rest.
             addRecs({ it == "rec_neweps" }, this)
-            addRecs({ it.startsWith("rec_because") }, this)
+            val mixed = personal.filter { it.key != "rec_neweps" }.map { HomeRow(it.key, it.title, it.subtitle, it.items) }
+            addAll(mixed.take(2))
             if (mine.isNotEmpty()) add(HomeRow("mylist", "הרשימה שלי", "סרטים וסדרות שסימנת", mine))
-            addRecs({ it.startsWith("rec_coll") }, this)
-            addRecs({ it == "rec_new" }, this)
+            addAll(mixed.drop(2).take(2))
             if (movies.isNotEmpty()) add(HomeRow("new", "חדש בשירות", items = movies))
-            addRecs({ it.startsWith("rec_actor") || it.startsWith("rec_cat") }, this)
-            addRecs({ it.startsWith("rec_genre") }, this)
-            addRecs({ it.startsWith("rec_theme") }, this)
+            addAll(mixed.drop(4))
             if (series.isNotEmpty()) add(HomeRow("eps", "פרקים חדשים", items = series))
             if (sport.isNotEmpty()) add(HomeRow("sport", "ספורט", "שידורים חיים", sport))
             if (kids.isNotEmpty()) add(HomeRow("kids", "ילדים", items = kids))
