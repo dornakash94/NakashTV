@@ -1,14 +1,14 @@
 package tv.nakash.data.remote
 
-import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromStream
+import kotlinx.serialization.serializer
 import okhttp3.Interceptor
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import retrofit2.Retrofit
@@ -69,17 +69,32 @@ class ApiProvider(private val client: OkHttpClient, private val account: Account
             addInterceptor(AuthInterceptor { candidate })
         }.build()
         return Retrofit.Builder().baseUrl(candidate.baseUrl).client(authClient)
-            .addConverterFactory(NetworkModule.json.asConverterFactory("application/json".toMediaType()))
+            .addConverterFactory(StreamingJsonConverterFactory(NetworkModule.json))
             .build().create(XtreamApi::class.java).auth()
     }
+    val signedIn get() = account.current() != null
     fun api(): XtreamApi {
         val base = account.current()?.baseUrl ?: error("Not signed in")
         cached?.let { if (it.first == base) return it.second }
         val api = Retrofit.Builder().baseUrl(base).client(client)
-            .addConverterFactory(NetworkModule.json.asConverterFactory("application/json".toMediaType()))
+            .addConverterFactory(StreamingJsonConverterFactory(NetworkModule.json))
             .build().create(XtreamApi::class.java)
         cached = base to api
         return api
     }
     fun urls(): StreamUrls { val a = account.current() ?: error("Not signed in"); return StreamUrls(a.baseUrl, a.username, a.password) }
+}
+
+/**
+ * Decodes responses straight from the network stream. The catalog lists (get_vod_streams, get_series, live streams)
+ * are tens of MB of JSON; the stock converter first read the whole body into one String (twice its size in memory),
+ * then built every object on top of it, which on a 1-2 GB TV box ran out of memory during the first sync.
+ */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+class StreamingJsonConverterFactory(private val json: Json) : retrofit2.Converter.Factory() {
+    override fun responseBodyConverter(type: java.lang.reflect.Type, annotations: Array<out Annotation>, retrofit: Retrofit):
+        retrofit2.Converter<okhttp3.ResponseBody, *> {
+        val loader = json.serializersModule.serializer(type)
+        return retrofit2.Converter<okhttp3.ResponseBody, Any?> { body -> body.use { json.decodeFromStream(loader, it.byteStream()) } }
+    }
 }

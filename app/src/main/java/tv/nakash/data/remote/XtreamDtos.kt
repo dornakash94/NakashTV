@@ -144,15 +144,15 @@ data class ServerInfo(
 
 @Serializable
 data class CategoryDto(
-    @SerialName("category_id") val categoryId: String,
-    @SerialName("category_name") val categoryName: String,
+    @SerialName("category_id") @Serializable(LenientString::class) val categoryId: String? = null,
+    @SerialName("category_name") val categoryName: String = "",
     @SerialName("parent_id") @Serializable(LenientInt::class) val parentId: Int? = 0,
 )
 
 @Serializable
 data class LiveStreamDto(
     @Serializable(LenientInt::class) val num: Int? = null,
-    val name: String,
+    val name: String = "",
     @SerialName("stream_id") val streamId: Int,
     @SerialName("stream_icon") @Serializable(LenientString::class) val streamIcon: String? = null,
     @SerialName("epg_channel_id") @Serializable(LenientString::class) val epgChannelId: String? = null,
@@ -166,7 +166,7 @@ data class LiveStreamDto(
 
 @Serializable
 data class VodStreamDto(
-    val name: String,
+    val name: String = "",
     @Serializable(LenientString::class) val title: String? = null,
     @Serializable(LenientString::class) val year: String? = null,
     @SerialName("stream_id") val streamId: Int,
@@ -207,7 +207,7 @@ data class VodInfoDto(
 
 @Serializable
 data class SeriesDto(
-    val name: String,
+    val name: String = "",
     @Serializable(LenientString::class) val title: String? = null,
     @Serializable(LenientString::class) val year: String? = null,
     @SerialName("series_id") val seriesId: Int,
@@ -229,7 +229,7 @@ data class SeriesDto(
 /** The details endpoint omits series_id; identity comes from the requested ID. */
 @Serializable
 data class SeriesDetailsDto(
-    val name: String,
+    val name: String = "",
     @Serializable(LenientString::class) val title: String? = null,
     @Serializable(LenientString::class) val year: String? = null,
     @Serializable(LenientString::class) val cover: String? = null,
@@ -269,7 +269,7 @@ data class SeasonDto(
 data class EpisodeDto(
     val id: String,
     @SerialName("episode_num") @Serializable(LenientInt::class) val episodeNum: Int? = null,
-    val title: String,
+    val title: String = "",
     @SerialName("container_extension") @Serializable(LenientString::class) val containerExtension: String? = "mp4",
     @Serializable(LenientInt::class) val season: Int? = null,
     @Serializable(LenientEpisodeInfo::class) val info: EpisodeInfoDto? = null,
@@ -292,8 +292,8 @@ data class ShortEpgResponse(@SerialName("epg_listings") val listings: List<EpgLi
 /** title and description are Base64 (UTF-8) — decoded in the mapper. */
 @Serializable
 data class EpgListingDto(
-    val id: String,
-    val title: String,
+    val id: String = "",
+    val title: String = "",
     val description: String = "",
     @SerialName("channel_id") @Serializable(LenientString::class) val channelId: String? = null,
     @SerialName("start_timestamp") @Serializable(LenientLong::class) val startTs: Long? = null,

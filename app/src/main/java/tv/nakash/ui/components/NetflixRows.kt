@@ -1,7 +1,6 @@
 package tv.nakash.ui.components
 
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -71,8 +70,46 @@ private val PosterW = 176.dp
 private val PosterWide = 469.dp
 private val WideW = 272.dp
 private val WideH = 153.dp
-private const val CardMs = 320
-private fun rowStep(@Suppress("UNUSED_PARAMETER") kind: CardKind) = PosterW + 12.dp
+private val DetailsH = 58.dp
+
+/** How long the newly focused card's picture takes to fade in (the step itself is instant, as on Netflix). */
+internal const val EnterMs = 120
+/** Moving between rows: one decelerating slide of the page. */
+internal const val RowSlideMs = 300
+
+/**
+ * The focused card sits at the row start from the very frame it is focused: requested here, applied in the same
+ * layout pass that makes it wide, so there is no slide and no frame with the card out of place.
+ */
+@Composable
+internal fun AnchorFocusedCard(rowList: androidx.compose.foundation.lazy.LazyListState, focusIndex: Int) {
+    val anchored = remember(rowList) { intArrayOf(-1) }
+    SideEffect {
+        if (focusIndex < 0) anchored[0] = -1
+        else if (anchored[0] != focusIndex) { anchored[0] = focusIndex; rowList.requestScrollToItem(focusIndex) }
+    }
+}
+
+/** The picture of a card that just took focus: from 40 % to full in [EnterMs]. Read it in a graphicsLayer. */
+@Composable
+internal fun rememberEnterAlpha(expanded: Boolean): androidx.compose.animation.core.Animatable<Float, androidx.compose.animation.core.AnimationVector1D> {
+    val a = remember { androidx.compose.animation.core.Animatable(1f) }
+    LaunchedEffect(expanded) { if (expanded) { a.snapTo(.4f); a.animateTo(1f, tween(EnterMs)) } else a.snapTo(1f) }
+    return a
+}
+
+/** Brings row [index] of the page to the top in one [RowSlideMs] slide (a plain jump when it isn't laid out yet). */
+internal suspend fun androidx.compose.foundation.lazy.LazyListState.slideToItem(index: Int) {
+    val info = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+    if (info == null) { scrollToItem(index); return }
+    if (kotlin.math.abs(info.offset) > 1) animateScrollBy(info.offset.toFloat(), tween(RowSlideMs, easing = FastOutSlowInEasing))
+}
+
+/** Puts a card's wide picture on disk ahead of time (memory untouched: what is on screen stays decoded). */
+internal fun prefetchWide(ctx: android.content.Context, url: String?) {
+    url ?: return
+    coil3.SingletonImageLoader.get(ctx).enqueue(coil3.request.ImageRequest.Builder(ctx).data(url).size(800, 450).memoryCachePolicy(coil3.request.CachePolicy.DISABLED).build())
+}
 
 /**
  * Rows only (no billboard): black page, list clipped under the nav bar, the focused row just below it, the focused card
@@ -104,6 +141,7 @@ fun NetflixRowsPage(
     val wides = remember(restoreKey) { HashMap<String, androidx.compose.runtime.MutableState<String?>>() }
     fun wideOf(key: String) = wides.getOrPut(key) { mutableStateOf(null) }
     val extrasScope = rememberCoroutineScope()
+    val ctxForPrefetch = androidx.compose.ui.platform.LocalContext.current
     suspend fun extrasOf(c: RowCard): tv.nakash.domain.TmdbDetails? {
         val lookup = c.extras ?: return null
         return extras.getOrPut(c.key) {
@@ -133,7 +171,14 @@ fun NetflixRowsPage(
         (shelves.getOrNull(i)?.cards.orEmpty().take(10) + shelves.getOrNull(i + 1)?.cards.orEmpty().take(3)).filter { it.kind == CardKind.POSTER }.forEach { trailerOf(it) }
     }
     val target = want?.let { k -> cardBounds?.let { TrailerTarget(k, it.translate(-stageOrigin), 10f) } }
-    LaunchedEffect(focusedShelf) { val i = shelves.indexOfFirst { it.key == focusedShelf }; if (i >= 0) list.animateScrollToItem(i) }
+    LaunchedEffect(focusedShelf) { val i = shelves.indexOfFirst { it.key == focusedShelf }; if (i >= 0) list.slideToItem(i) }
+    // The wide pictures of the next cards are on disk before you get there, so a step shows its picture at once.
+    LaunchedEffect(focusedShelf, focusedCard) {
+        val cards = shelves.firstOrNull { it.key == focusedShelf }?.cards ?: return@LaunchedEffect
+        val at = cards.indexOfFirst { it.key == focusedCard }.coerceAtLeast(0)
+        delay(150)
+        cards.drop(at + 1).take(2).forEach { c -> prefetchWide(ctxForPrefetch, (wideOf(c.key).value ?: c.wide)?.let(::cardSized)) }
+    }
 
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val tintSource = focused?.let { wideOf(it.key).value ?: it.wide ?: it.poster ?: it.channel?.logo }
@@ -163,19 +208,7 @@ fun NetflixRowsPage(
                         rowState.SaveableStateProvider(shelf.key) {
                             val rowList = rememberLazyListState()
                             val focusIndex = if (rowFocused) shelf.cards.indexOfFirst { it.key == focusedCard }.let { if (it < 0) shelf.cards.size else it } else -1
-                            val stepPx = with(LocalDensity.current) { rowStep(kind).toPx() }
-                            val posterPx = with(androidx.compose.ui.platform.LocalDensity.current) { PosterW.toPx() }
-                                // One smooth move per press, on the same curve and time as the widen/shrink. The target is measured
-                                // from the screen at the moment of the press (not tracked), so quick presses can't make it drift:
-                                // the focused card ends at the row start once every card before it is back to poster size.
-                                LaunchedEffect(focusIndex) {
-                                    if (focusIndex < 0) return@LaunchedEffect
-                                    var info = rowList.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusIndex }
-                                    if (info == null) { rowList.scrollToItem(focusIndex); androidx.compose.runtime.withFrameNanos { }; info = rowList.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusIndex } ?: return@LaunchedEffect }
-                                    val shrinkBefore = rowList.layoutInfo.visibleItemsInfo.filter { it.index < focusIndex }.sumOf { (it.size - posterPx).coerceAtLeast(0f).toDouble() }.toFloat()
-                                    val delta = info.offset - shrinkBefore
-                                    if (kotlin.math.abs(delta) > 1f) rowList.animateScrollBy(delta, tween(CardMs, easing = androidx.compose.animation.core.FastOutSlowInEasing))
-                                }
+                            AnchorFocusedCard(rowList, focusIndex)
                             val rowFirst = remember(shelf.key) { FocusRequester() }
                             // Rows keep the platform's bring-into-view (focus search across a row relies on it); only the page list
                             // has it disabled. Our anchoring scroll then only adds what is still missing.
@@ -209,7 +242,8 @@ fun NetflixRowsPage(
                             }
                             }
                         }
-                        Box(Modifier.padding(horizontal = 40.dp).height(if (rowFocused) 58.dp else 0.dp)) {
+                        // Same height on every row: focus moving between rows never changes the page's layout mid-slide.
+                        Box(Modifier.padding(horizontal = 40.dp).height(DetailsH)) {
                             val f = if (rowFocused) shelf.cards.firstOrNull { it.key == focusedCard } else null
                             f?.let {
                                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -234,21 +268,21 @@ fun NetflixRowsPage(
 @Composable
 private fun PosterExpandingCard(c: RowCard, expanded: Boolean, playingHere: Boolean, onBounds: (Rect) -> Unit, onFocus: () -> Unit,
                                 livePlayer: androidx.media3.common.Player? = null, liveFrame: Boolean = false) {
-    val width by animateDpAsState(if (expanded) PosterWide else PosterW, tween(CardMs, easing = FastOutSlowInEasing), label = "w")
     var wideOk by remember(c.wide) { mutableStateOf(c.kind == CardKind.WIDE) }
     val hasWide = c.wide != null && c.wide != c.poster
-    val wideAlpha by animateFloatAsState(if (expanded && hasWide && wideOk) 1f else 0f, tween(if (expanded) 320 else 140), label = "wide")
-    val fillAlpha by animateFloatAsState(if (expanded && c.kind == CardKind.POSTER && !(hasWide && wideOk)) 1f else 0f, tween(260), label = "fill")
+    // Netflix's step: the card is wide at once (animating the width re-measured the whole row every frame on weak
+    // boxes); only its picture fades in for a moment, and every alpha here is read in the layer, not in composition.
+    val enter = rememberEnterAlpha(expanded)
     val imageAlpha by animateFloatAsState(if (playingHere) 0f else 1f, tween(450), label = "img")
     val liveAlpha by animateFloatAsState(if (expanded && liveFrame) 1f else 0f, tween(400), label = "live")
     val shape = RoundedCornerShape(10.dp)
-    Surface(onClick = c.onClick, onLongClick = c.onLongClick, modifier = Modifier.width(width).height(PosterH).onFocusChanged { if (it.isFocused) onFocus() }
-            // Only the focused card's position is used (for its trailer); the others don't report it every frame.
+    Surface(onClick = c.onClick, onLongClick = c.onLongClick, modifier = Modifier.width(if (expanded) PosterWide else PosterW).height(PosterH).onFocusChanged { if (it.isFocused) onFocus() }
+            // Only the focused card's position is used (for its trailer); the others don't report it.
             .then(if (expanded) Modifier.onGloballyPositioned { onBounds(it.boundsInRoot()) } else Modifier),
         shape = ClickableSurfaceDefaults.shape(shape), scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = Color.Transparent),
         border = ClickableSurfaceDefaults.border(focusedBorder = androidx.tv.material3.Border(BorderStroke(3.dp, Color.White), shape = shape))) {
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = imageAlpha }.background(if (c.kind == CardKind.CHANNEL) Color(0xFF17181D) else NakashColors.Tile), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = imageAlpha * enter.value }.background(if (c.kind == CardKind.CHANNEL) Color(0xFF17181D) else NakashColors.Tile), contentAlignment = Alignment.Center) {
             when (c.kind) {
                 CardKind.CHANNEL -> {
                     c.channel?.let { Box(Modifier.padding(bottom = 40.dp)) { ChannelLogo(it, 96, plain = true) } }
@@ -259,9 +293,10 @@ private fun PosterExpandingCard(c: RowCard, expanded: Boolean, playingHere: Bool
                 }
                 CardKind.WIDE -> AsyncImage(c.wide ?: c.poster, c.title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 CardKind.POSTER -> {
-                    if (fillAlpha > 0f) AsyncImage(c.poster, null, Modifier.fillMaxSize().graphicsLayer { alpha = fillAlpha }.blur(24.dp), contentScale = ContentScale.Crop, alpha = .55f)
+                    // No real wide picture: the poster's own colours fill the wide card behind the untouched poster.
+                    if (expanded && !(hasWide && wideOk)) AsyncImage(c.poster, null, Modifier.fillMaxSize().blur(24.dp), contentScale = ContentScale.Crop, alpha = .55f)
                     AsyncImage(c.poster ?: c.wide, c.title, Modifier.width(PosterW).fillMaxHeight(), contentScale = ContentScale.Crop)
-                    if (hasWide && (expanded || wideAlpha > 0f)) AsyncImage(c.wide, null, Modifier.fillMaxSize().graphicsLayer { alpha = wideAlpha }, contentScale = ContentScale.Crop,
+                    if (expanded && hasWide) AsyncImage(c.wide, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
                         onSuccess = { st -> val sz = st.painter.intrinsicSize; wideOk = sz.width > 0f && sz.width / sz.height >= 1.6f })
                 }
             }

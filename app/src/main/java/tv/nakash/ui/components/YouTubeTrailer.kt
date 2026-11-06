@@ -61,7 +61,9 @@ fun YouTubeTrailer(videoKey: String, muted: Boolean, modifier: Modifier = Modifi
         onDispose { lifecycle.removeObserver(observer) }
     }
     AndroidView(modifier = modifier, factory = { ctx ->
-        WebView(ctx).apply {
+        // No WebView on this device (missing, or being updated): no trailer, instead of a crash.
+        val view = runCatching { WebView(ctx) }.getOrElse { main.post(onError); return@AndroidView android.view.View(ctx) }
+        view.apply {
             web = this
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             setBackgroundColor(Color.BLACK)
@@ -82,5 +84,5 @@ fun YouTubeTrailer(videoKey: String, muted: Boolean, modifier: Modifier = Modifi
             loadDataWithBaseURL("https://github.com/dornakash94/NakashTV", html, "text/html", "utf-8", null)
             handle?.view = this
         }
-    }, onRelease = { runCatching { it.stopLoading(); it.loadUrl("about:blank"); it.destroy() } })
+    }, onRelease = { (it as? WebView)?.let { w -> runCatching { w.stopLoading(); w.loadUrl("about:blank"); w.destroy() } } })
 }

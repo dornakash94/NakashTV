@@ -21,7 +21,8 @@ class NakashApp : Application(), Configuration.Provider, SingletonImageLoader.Fa
     @Inject lateinit var okHttp: OkHttpClient
     @Inject lateinit var diagnostics: tv.nakash.data.diag.Diagnostics
 
-    override fun onCreate() { super.onCreate(); diagnostics.install(); SyncWorker.schedule(this) }
+    // Both crash handlers chain: CrashLog keeps the last crash on the TV (Settings shows it), Diagnostics sends it.
+    override fun onCreate() { super.onCreate(); CrashLog.install(this); diagnostics.install(); SyncWorker.schedule(this) }
     override val workManagerConfiguration get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
 
     /** Posters/logos go through the same OkHttp (fixed User-Agent), 512 MB disk cache. */

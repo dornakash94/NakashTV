@@ -3,7 +3,6 @@ package tv.nakash.ui.library
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -70,6 +69,7 @@ import kotlinx.coroutines.withContext
 import tv.nakash.ui.components.PosterCard
 import tv.nakash.ui.components.ifAttached
 import tv.nakash.ui.components.TrailerStage
+import tv.nakash.ui.components.slideToItem
 import tv.nakash.ui.components.TrailerTarget
 import tv.nakash.ui.theme.NakashColors
 
@@ -80,7 +80,7 @@ private data class Shelf(val key: String, val title: String, val items: List<She
 private val CardH = 264.dp
 private val PosterW = 176.dp
 private val WideW = 469.dp          // 16:9 at the poster's height
-private const val CardMs = 320
+
 
 /**
  * Movies / series browse, Netflix-TV style:
@@ -241,7 +241,7 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     val focusedShelfIndex = shelves.indexOfFirst { it.key == focusedShelf }
     LaunchedEffect(focusedShelfIndex, billboardFocused, selectedCategory) {
         if (selectedCategory != null) return@LaunchedEffect
-        if (billboardFocused) list.animateScrollToItem(0) else if (focusedShelfIndex >= 0) list.animateScrollToItem(focusedShelfIndex + 1, 0)
+        if (billboardFocused) list.slideToItem(0) else if (focusedShelfIndex >= 0) list.slideToItem(focusedShelfIndex + 1)
     }
     // Pre-load the wide images of the row you are on, so a card widens without an image popping in.
     // Look up the trailers of the whole row you are on (and the next one) ahead of time, so a card starts playing
@@ -254,8 +254,8 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
     LaunchedEffect(focusedId, focusedShelf) {
         val items = shelves.firstOrNull { it.key == focusedShelf }?.items ?: return@LaunchedEffect
         val at = items.indexOfFirst { it.id == focusedId }.coerceAtLeast(0)
-        delay(400)
-        items.drop(at).take(3).forEach { prefetch(ctx, wideOf(it)) }
+        delay(150)
+        items.drop(at + 1).take(2).forEach { tv.nakash.ui.components.prefetchWide(ctx, wideOf(it)) }
     }
     val manualScroll = remember { object : BringIntoViewSpec { override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float) = 0f } }
     val playFocus = remember { FocusRequester() }
@@ -323,26 +323,9 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                             rowState.SaveableStateProvider(shelf.key) {
                                 val rowList = rememberLazyListState()
                                 val focusIndex = if (rowFocused) shelf.items.indexOfFirst { it.id == focusedId }.let { if (it < 0 && focusedId == null) shelf.items.size else it } else -1
-                                // The focused card always sits at the row start; the scroll is driven here, never by
-                                // bring-into-view (which measured the card before it widened and left it half off-screen).
-                                // Every card before the focused one is a poster, so the anchor offset is simply index × (poster + gap).
-                                // Scrolling there with the same curve and duration as the widen/shrink keeps the row one smooth slide.
-                                val density = androidx.compose.ui.platform.LocalDensity.current
-                                val stepPx = with(density) { (PosterW + 12.dp).toPx() }
-                                // Cards before the focused one are posters: its start sits at index × step. Scrolling there on the
-                                // same curve and duration as the widen/shrink makes the whole row one continuous slide.
-                                val posterPx = with(androidx.compose.ui.platform.LocalDensity.current) { PosterW.toPx() }
-                                // One smooth move per press, on the same curve and time as the widen/shrink. The target is measured
-                                // from the screen at the moment of the press (not tracked), so quick presses can't make it drift:
-                                // the focused card ends at the row start once every card before it is back to poster size.
-                                LaunchedEffect(focusIndex) {
-                                    if (focusIndex < 0) return@LaunchedEffect
-                                    var info = rowList.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusIndex }
-                                    if (info == null) { rowList.scrollToItem(focusIndex); androidx.compose.runtime.withFrameNanos { }; info = rowList.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusIndex } ?: return@LaunchedEffect }
-                                    val shrinkBefore = rowList.layoutInfo.visibleItemsInfo.filter { it.index < focusIndex }.sumOf { (it.size - posterPx).coerceAtLeast(0f).toDouble() }.toFloat()
-                                    val delta = info.offset - shrinkBefore
-                                    if (kotlin.math.abs(delta) > 1f) rowList.animateScrollBy(delta, tween(CardMs, easing = androidx.compose.animation.core.FastOutSlowInEasing))
-                                }
+                                // The focused card always sits at the row start, from the frame it is focused (no slide, as on
+                                // Netflix); the scroll is driven here, never by bring-into-view.
+                                tv.nakash.ui.components.AnchorFocusedCard(rowList, focusIndex)
                                 // Entering a row lands on the card you left it on, or its first card: never the card that happens to
                                 // sit under the middle of the widened one above.
                                 val rowFirst = remember(shelf.key) { FocusRequester() }
@@ -372,7 +355,8 @@ fun DiscoverScreen(nav: NavHostController, kind: String, vm: LibraryViewModel = 
                                 }
                             }
                             // Details of the focused title, under the row (Netflix).
-                            Box(Modifier.padding(start = 40.dp, end = 40.dp).height(if (rowFocused) 58.dp else 0.dp)) {
+                            // Same height on every row: focus moving between rows never changes the page's layout mid-slide.
+                            Box(Modifier.padding(start = 40.dp, end = 40.dp).height(58.dp)) {
                                 focusedItem?.let { f ->
                                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                         Text(listOfNotNull(f.title, f.resumeLabel ?: f.year?.toString(), f.genres.split(',').firstOrNull()?.takeIf { it.isNotBlank() }).joinToString("  ·  "),
@@ -433,32 +417,31 @@ private fun BillboardButton(label: String, icon: androidx.compose.ui.graphics.ve
 }
 
 /**
- * Row card: a 2:3 poster that widens to 16:9 when focused (spring, no bounce). The wide image was pre-loaded, so it
- * fades in over the stretching poster; when the trailer plays here both fade out and the video behind shows through.
+ * Row card: a 2:3 poster that is 16:9 while focused. Like Netflix it changes size at once (no width animation, which
+ * re-measured the whole row every frame); only the picture fades in briefly. When the trailer plays here the picture
+ * fades out and the video behind shows through.
  */
 @Composable
 private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, playingHere: Boolean, onBounds: (Rect) -> Unit, onFocus: () -> Unit, click: () -> Unit) {
-    val width by animateDpAsState(if (expanded) WideW else PosterW, tween(CardMs, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "cardW")
     // The provider sometimes gives the poster (or a portrait image) as "backdrop": only a real landscape image is used wide.
     var wideOk by remember(item.backdrop) { mutableStateOf(false) }
     val hasWide = item.backdrop != null && item.backdrop != item.image
-    val wideAlpha by animateFloatAsState(if (expanded && hasWide && wideOk) 1f else 0f, tween(if (expanded) 320 else 140), label = "wide")
-    val fillAlpha by animateFloatAsState(if (expanded && !(hasWide && wideOk)) 1f else 0f, tween(260), label = "fill")
+    val enter = tv.nakash.ui.components.rememberEnterAlpha(expanded)
     val imageAlpha by animateFloatAsState(if (playingHere) 0f else 1f, tween(450), label = "cardImage")
     val shape = RoundedCornerShape(10.dp)
-    Surface(onClick = click, modifier = Modifier.width(width).height(CardH).onFocusChanged { if (it.isFocused) onFocus() }
+    Surface(onClick = click, modifier = Modifier.width(if (expanded) WideW else PosterW).height(CardH).onFocusChanged { if (it.isFocused) onFocus() }
             .then(if (expanded) Modifier.onGloballyPositioned { onBounds(it.boundsInRoot()) } else Modifier),
         shape = ClickableSurfaceDefaults.shape(shape), scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = Color.Transparent),
         border = ClickableSurfaceDefaults.border(focusedBorder = androidx.tv.material3.Border(BorderStroke(3.dp, Color.White), shape = shape))) {
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = imageAlpha }.background(NakashColors.Tile), contentAlignment = Alignment.Center) {
-            // No wide image: the poster's own colours, blurred, fill the widened card behind the untouched poster.
-            if (fillAlpha > 0f) AsyncImage(item.image, null, Modifier.fillMaxSize().graphicsLayer { alpha = fillAlpha }.blur(24.dp), contentScale = ContentScale.Crop, alpha = .55f)
-            // The poster never stretches: it keeps its 2:3 size while the card widens around it.
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = imageAlpha * enter.value }.background(NakashColors.Tile), contentAlignment = Alignment.Center) {
+            // No wide image: the poster's own colours, blurred, fill the wide card behind the untouched poster.
+            if (expanded && !(hasWide && wideOk)) AsyncImage(item.image, null, Modifier.fillMaxSize().blur(24.dp), contentScale = ContentScale.Crop, alpha = .55f)
+            // The poster never stretches: it keeps its 2:3 size inside the wide card.
             AsyncImage(item.image ?: item.backdrop, item.title, Modifier.width(PosterW).fillMaxHeight(), contentScale = ContentScale.Crop)
-            if (hasWide && (expanded || wideAlpha > 0f)) AsyncImage(item.backdrop, null, Modifier.fillMaxSize().graphicsLayer { alpha = wideAlpha }, contentScale = ContentScale.Crop,
+            if (expanded && hasWide) AsyncImage(item.backdrop, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
                 onSuccess = { st -> val sz = st.painter.intrinsicSize; wideOk = sz.width > 0f && sz.width / sz.height >= 1.6f })
-            if (expanded) Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.6f to Color.Transparent, 1f to Color.Black.copy(alpha = .6f * wideAlpha))))
+            if (expanded && hasWide && wideOk) Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.6f to Color.Transparent, 1f to Color.Black.copy(alpha = .6f))))
             item.progress?.let { p ->
                 androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
                     Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(4.dp).background(Color.White.copy(alpha = .25f))) { Box(Modifier.fillMaxWidth(p).fillMaxHeight().background(NakashColors.Live)) }
@@ -467,10 +450,3 @@ private fun ExpandingCard(item: ShelfTitle, expanded: Boolean, playingHere: Bool
         }
     }
 }
-
-private fun prefetch(ctx: android.content.Context, url: String?) {
-    url ?: return
-    // Warms the disk cache only, decoded at card size: an unsized request decodes the full image and evicts what is on screen.
-    coil3.SingletonImageLoader.get(ctx).enqueue(coil3.request.ImageRequest.Builder(ctx).data(url).size(800, 450).memoryCachePolicy(coil3.request.CachePolicy.DISABLED).build())
-}
-

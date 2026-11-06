@@ -20,6 +20,9 @@ class SyncWorker @AssistedInject constructor(
     private val catalog: CatalogRepository, private val epg: EpgRepository,
 ) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
+        // Scheduled at app start, so on a new install it first runs before anyone signed in: nothing to do yet
+        // (retrying only failed three times and then fought the sign-in screen's own first sync).
+        if (!catalog.signedIn) return Result.success()
         val results = listOf(
             runCatching { catalog.syncLive() }, runCatching { catalog.syncVod() },
             runCatching { catalog.syncSeries() }, runCatching { epg.syncXmltv() },

@@ -76,6 +76,9 @@ class ProfileSync @Inject constructor(
         }
     }
 
+    /** The app left the screen: no sync every 30 s in the background (the TV box's CPU and network go to whatever is on). */
+    fun pause() { loop?.cancel(); loop = null }
+
     /**
      * The app is leaving the screen (Home, another input, the TV switched off): sync now, and also hand Android a job
      * that syncs once the network is there, which runs even if the app is frozen before this finishes.
