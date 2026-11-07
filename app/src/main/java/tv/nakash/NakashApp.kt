@@ -25,9 +25,19 @@ class NakashApp : Application(), Configuration.Provider, SingletonImageLoader.Fa
     override fun onCreate() { super.onCreate(); CrashLog.install(this); diagnostics.install(); SyncWorker.schedule(this) }
     override val workManagerConfiguration get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
 
-    /** Posters/logos go through the same OkHttp (fixed User-Agent), 512 MB disk cache. */
+    /**
+     * Posters/logos go through the same OkHttp (fixed User-Agent, same connection pool), 512 MB disk cache.
+     * Almost every poster comes from the provider's one host: OkHttp's default of 5 requests per host loaded a fresh
+     * screen of ~30 posters in six waves (seconds of grey cards on a new tab). Decoding, on the other hand, is held to
+     * two threads: many 600x900 JPEGs decoded at once took the CPU from the UI thread on weak boxes, and scrolling fast
+     * through rows that still had to load stuttered.
+     */
     override fun newImageLoader(context: PlatformContext): ImageLoader = ImageLoader.Builder(context)
-        .components { add(OkHttpNetworkFetcherFactory(callFactory = { okHttp })) }
+        .components {
+            val images = okHttp.newBuilder().dispatcher(okhttp3.Dispatcher().apply { maxRequests = 32; maxRequestsPerHost = 12 }).build()
+            add(OkHttpNetworkFetcherFactory(callFactory = { images }))
+        }
+        .decoderCoroutineContext(kotlinx.coroutines.Dispatchers.Default.limitedParallelism(2))
         // Decoded images in RAM stay modest: TVs give an app far less memory than phones.
         .memoryCache { coil3.memory.MemoryCache.Builder().maxSizePercent(context, 0.15).build() }
         .diskCache { DiskCache.Builder().directory(cacheDir.resolve("images")).maxSizeBytes(512L * 1024 * 1024).build() }
