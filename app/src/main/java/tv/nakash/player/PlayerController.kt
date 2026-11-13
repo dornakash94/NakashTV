@@ -141,9 +141,80 @@ class PlayerController @Inject constructor(
         }
     }
 
+    /**
+     * The player's internal thread, shared with the preload (a preloaded source must live on the player's playback
+     * looper). Audio priority, as ExoPlayer's own playback thread.
+     */
+    private val playbackThread by lazy { android.os.HandlerThread("NakashPlayback", android.os.Process.THREAD_PRIORITY_AUDIO).apply { start() } }
+    private val playbackHandler by lazy { android.os.Handler(playbackThread.looper) }
+    private lateinit var loadControl: DefaultLoadControl
+
+    // ---------- preload (title page) ----------
+    // While the viewer is on a title page, the video that Play would start is opened ahead: the provider's redirect, the
+    // MP4 index (1.5 s of the 3.2 s start measured on the emulator), the seek to the resume point and ~2 s of video. No
+    // decoder is started, so the page's trailer is untouched. One at a time; dropped when the page closes, when another
+    // video plays, or after 90 s unused, so it never holds a provider connection for long.
+    private class Preloaded(val url: String, val startMs: Long, val source: androidx.media3.exoplayer.source.preload.PreloadMediaSource) { var used = false }
+    private var preloaded: Preloaded? = null
+    private var preloadExpiry: Job? = null
+    private val preloadFactory by lazy {
+        val p = player
+        val bandwidth = androidx.media3.exoplayer.upstream.DefaultBandwidthMeter.getSingletonInstance(ctx)
+        val selector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(ctx).also { it.init({}, bandwidth) }
+        val control = object : androidx.media3.exoplayer.source.preload.PreloadMediaSource.PreloadControl {
+            override fun onSourcePrepared(src: androidx.media3.exoplayer.source.preload.PreloadMediaSource) = true
+            override fun onTracksSelected(src: androidx.media3.exoplayer.source.preload.PreloadMediaSource) = true
+            override fun onContinueLoadingRequested(src: androidx.media3.exoplayer.source.preload.PreloadMediaSource, bufferedPositionUs: Long): Boolean {
+                // Measured from the preload's start (0 at the resume point), not from the start of the file: ~2 s of
+                // video, then loading stops. (Were it ever absolute, this stops at once: index only, never more.)
+                val more = bufferedPositionUs < PRELOAD_VIDEO_US
+                if (!more && tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashPreload", "ready buffered=${bufferedPositionUs / 1000}ms")
+                return more
+            }
+            override fun onUsedByPlayer(src: androidx.media3.exoplayer.source.preload.PreloadMediaSource) { if (tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashPreload", "used by player") }
+            override fun onPreloadError(e: androidx.media3.exoplayer.source.preload.PreloadException, src: androidx.media3.exoplayer.source.preload.PreloadMediaSource) {
+                if (tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashPreload", "error ${e.cause?.javaClass?.simpleName}")
+            }
+        }
+        androidx.media3.exoplayer.source.preload.PreloadMediaSource.Factory(DefaultMediaSourceFactory(OkHttpDataSource.Factory(videoClient)), control, selector, bandwidth,
+            Array(p.rendererCount) { p.getRenderer(it).capabilities }, loadControl.allocator, playbackThread.looper)
+    }
+
+    private fun urlOf(req: PlayRequest): String? = when (req) {
+        is PlayRequest.Movie -> api.urls().movie(req.id, req.ext)
+        is PlayRequest.Episode -> api.urls().episode(req.episodeId, req.ext)
+        else -> null
+    }
+
+    /** Opens [req] ahead of the Play press (movies and episodes only). Nothing when that video is already the player's. */
+    fun preload(req: PlayRequest) {
+        val url = runCatching { urlOf(req) }.getOrNull() ?: return
+        val startMs = when (req) { is PlayRequest.Movie -> req.startMs; is PlayRequest.Episode -> req.startMs; else -> 0 }
+        // The same video already in the player (back from it to the page, paused): nothing to open.
+        if (_state.value.error == null && _state.value.request?.let { runCatching { urlOf(it) }.getOrNull() } == url) return
+        preloaded?.let { if (it.url == url && it.startMs == startMs) return }
+        dropPreload()
+        val source = preloadFactory.createMediaSource(MediaItem.fromUri(url))
+        val startUs = startMs * 1000
+        preloaded = Preloaded(url, startMs, source)
+        playbackHandler.post { source.preload(startUs) }
+        preloadExpiry = scope.launch { delay(90_000); dropPreload() }
+        if (tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashPreload", "start at ${startMs}ms")
+    }
+
+    /** Lets an unused preload go (its connection closes). A preload the player took is the player's now. */
+    fun dropPreload() {
+        preloadExpiry?.cancel(); preloadExpiry = null
+        val p = preloaded ?: return
+        preloaded = null
+        if (!p.used) { playbackHandler.post { p.source.releasePreloadMediaSource() }; if (tv.nakash.BuildConfig.DEBUG) android.util.Log.i("NakashPreload", "dropped") }
+    }
+    /** The preloaded source the player is playing, released once the player moves on to another video. */
+    private var playingPreload: androidx.media3.exoplayer.source.preload.PreloadMediaSource? = null
+
     private fun build(): ExoPlayer {
         val dsf = OkHttpDataSource.Factory(videoClient)
-        val loadControl = DefaultLoadControl.Builder()
+        loadControl = DefaultLoadControl.Builder()
             // Continuous loading (min = max): the buffer is topped up all the time in small reads. With 15 s / 30 s it
             // paused at 30 s and then pulled 15 s of video in one burst, which showed as a small freeze every ~20-30 s
             // in movies and series on weak TV boxes. Start stays fast (playback begins after 0.75-1.5 s of video).
@@ -160,6 +231,7 @@ class PlayerController @Inject constructor(
             .setMediaSourceFactory(DefaultMediaSourceFactory(dsf))
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
+            .setPlaybackLooper(playbackThread.looper)
             .setHandleAudioBecomingNoisy(true)
             .build().also { p ->
                 // Resume and seeks land on the nearest keyframe: no downloading and decoding up to a whole GOP
@@ -353,7 +425,17 @@ class PlayerController @Inject constructor(
         val tunnel = !live && playbackPrefs.state.value.tunneling
         if (trackSelector.parameters.tunnelingEnabled != tunnel)
             trackSelector.setParameters(trackSelector.buildUponParameters().setTunnelingEnabled(tunnel))
-        player.setMediaItem(item, if (startMs > 0) startMs else C.TIME_UNSET)
+        val pre = preloaded?.takeIf { !live && it.url == url && it.startMs == startMs }
+        val previous = playingPreload
+        if (pre != null) {
+            pre.used = true; preloaded = null; preloadExpiry?.cancel()
+            player.setMediaSource(pre.source, startMs); playingPreload = pre.source
+        } else {
+            dropPreload()
+            player.setMediaItem(item, if (startMs > 0) startMs else C.TIME_UNSET); playingPreload = null
+        }
+        // Posted after the player's own switch on the same thread: the old source is released only once it let go.
+        if (previous != null && previous !== playingPreload) playbackHandler.post { previous.releasePreloadMediaSource() }
         player.prepare(); player.playWhenReady = true
         _state.update { it.copy(error = null) }
         if (live) armStallTimer()
@@ -556,3 +638,6 @@ class PlayerController @Inject constructor(
 private val SPEEDS = listOf(1f, 1.25f, 1.5f, 2f, 0.75f)
 /** "1.5", "2", "0.75": no trailing zero. */
 fun speedLabel(f: Float): String = if (f % 1f == 0f) f.toInt().toString() else f.toString()
+
+/** How much video a title page opens ahead of the Play press. */
+private const val PRELOAD_VIDEO_US = 2_000_000L

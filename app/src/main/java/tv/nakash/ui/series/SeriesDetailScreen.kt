@@ -210,12 +210,16 @@ fun SeriesDetailScreen(nav:NavHostController,id:Int,series:Boolean=true,vm:Libra
             openPlayer()
         }
     }
-    // Warm the stream connection for what Play would start, while the user reads the page.
-    val warmKey=if(series) chosen?.id else movie?.id?.toString()
-    LaunchedEffect(warmKey) {
-        if(series) chosen?.let {vm.player.prewarm(request(it))}
-        else movie?.let {m -> vm.player.prewarm(PlayRequest.Movie(m.id,m.title,m.containerExt,0))}
+    // What Play would start: its connection is warmed at once and, after a second on the page, the video itself is
+    // opened ahead (index, resume point, a little video; no decoder), so Play starts almost at once. Dropped on leaving.
+    val playTarget:PlayRequest?=if(series) chosen?.let {request(it)} else movie?.let {m -> PlayRequest.Movie(m.id,m.title,m.containerExt,resume?.takeUnless {it.completed}?.positionMs ?: 0)}
+    LaunchedEffect(playTarget) {
+        val r=playTarget ?: return@LaunchedEffect
+        vm.player.prewarm(r)
+        delay(1_000)
+        vm.player.preload(r)
     }
+    DisposableEffect(Unit) { onDispose { vm.player.dropPreload() } }
     LaunchedEffect(returnedToMenu) {
         if(returnedToMenu) {
             menuVisible=true;frame=false;started=false;handoff=false;panel=null
