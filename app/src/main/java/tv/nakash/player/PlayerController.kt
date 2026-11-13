@@ -213,6 +213,11 @@ class PlayerController @Inject constructor(
         // One video at a time: the card preview and the trailer web renderer give their decoders and memory back.
         videoFrameRate.value = 0f
         preview.stop(); tv.nakash.ui.components.TrailerPlayer.release(); saveNow(); stopProgress(); stallJob?.cancel(); playJob?.cancel(); m3u8Failures = 0
+        // Speed: movies and episodes only; a new title starts at ×1, the next episode of the same series keeps it.
+        val prev = _state.value.request
+        val keepSpeed = req is PlayRequest.Episode && prev is PlayRequest.Episode && prev.seriesId == req.seriesId
+        if (!keepSpeed) speed.value = 1f
+        player.setPlaybackSpeed(if (req is PlayRequest.Movie || req is PlayRequest.Episode) speed.value else 1f)
         playJob = scope.launch {
             when (req) {
                 is PlayRequest.Live -> {
@@ -266,6 +271,15 @@ class PlayerController @Inject constructor(
     }
     fun clearToast() { _state.update { it.copy(toast = null) } }
     fun toast(msg: String) { _state.update { it.copy(toast = msg) } }
+
+    /** Playback speed for movies and episodes (×1 → ×1.25 → ×1.5 → ×2 → ×0.75). Kept for the next episode of the same series. */
+    val speed = MutableStateFlow(1f)
+    fun cycleSpeed() {
+        // Tunneled audio cannot change speed (the TV's hardware paces it).
+        if (playbackPrefs.state.value.tunneling) { toast("שינוי מהירות לא זמין כשניגון חלק (מנהרה) פעיל"); return }
+        val next = SPEEDS[(SPEEDS.indexOf(speed.value) + 1) % SPEEDS.size]
+        speed.value = next; player.setPlaybackSpeed(next); toast("מהירות ×${speedLabel(next)}")
+    }
 
     fun stop() {
         resumeOnReturn=null; watchJob?.cancel()
@@ -539,4 +553,6 @@ class PlayerController @Inject constructor(
     }
 }
 
-
+private val SPEEDS = listOf(1f, 1.25f, 1.5f, 2f, 0.75f)
+/** "1.5", "2", "0.75": no trailing zero. */
+fun speedLabel(f: Float): String = if (f % 1f == 0f) f.toInt().toString() else f.toString()

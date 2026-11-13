@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Speed
 import tv.nakash.domain.PlaybackPolicy
 import androidx.compose.ui.window.Dialog
 import androidx.compose.foundation.lazy.LazyColumn
@@ -146,7 +147,8 @@ class PlayerViewModel @Inject constructor(
         if (timelineFor == ch.id && fresh && timeline.value.isNotEmpty()) return@launch
         timelineFor = ch.id; timelineLoadedAt = System.currentTimeMillis()
         val now = System.currentTimeMillis() / 1000
-        timeline.value = epg.programs(ch.epgChannelId, now - ch.archiveDays.coerceIn(1, 3) * 86400L, now + 6 * 3600).filter { !it.isFiller }
+        // The whole catch-up window (the guide keeps 33 days): the in-channel list moves between its days.
+        timeline.value = epg.programs(ch.epgChannelId, now - ch.archiveDays.coerceIn(1, 14) * 86400L, now + 6 * 3600).filter { !it.isFiller }
     }
     fun programAt(epoch: Long): EpgEntity? = timeline.value.lastOrNull { it.start <= epoch && it.end > epoch }
     fun snap(base: Long, target: Long): Long = PlaybackPolicy.snapToProgramStart(base, target, timeline.value.map { it.start })
@@ -177,6 +179,9 @@ class PlayerViewModel @Inject constructor(
     }
     fun catchupRows(ch: ChannelEntity, now: Long): List<EpgEntity> =
         mergedTimeline().filter { PlaybackPolicy.archiveAvailable(it.start, it.end, it.isFiller, ch.archiveDays, now) }.sortedByDescending { it.start }
+    /** The catch-up list a day at a time: the days that have shows, newest first, and that day's shows. */
+    fun catchupDays(rows: List<EpgEntity>): List<java.time.LocalDate> = rows.map { localDay(it.start) }.distinct()
+    fun catchupRowsOn(rows: List<EpgEntity>, day: java.time.LocalDate?): List<EpgEntity> = if (day == null) rows else rows.filter { localDay(it.start) == day }
 
     val nextEpisode = MutableStateFlow<EpisodeEntity?>(null)
     fun loadNext(req: PlayRequest.Episode) = viewModelScope.launch { nextEpisode.value=catalog.nextEpisode(req.seriesId,req.season,req.number) }
@@ -229,6 +234,7 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
     var scrubPauseUntil by remember { mutableLongStateOf(0L) }
     var showPrograms by remember { mutableStateOf(false) }
     var programsIndex by remember { mutableIntStateOf(0) }
+    var programsDay by remember { mutableIntStateOf(0) }     // 0 = the newest day with shows, 1 = the day before…
     tv.nakash.ui.components.PlaybackFrameCache(videoView,vm.controller,vm.thumbs,scrubbing=scrubMs!=null)
     // "התאמת קצב רענון": while a movie / episode plays, the TV runs at a refresh that shows its frame rate evenly;
     // leaving the player gives the TV its own mode back. Live channels are left alone (zapping would blank the screen).
@@ -282,7 +288,7 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
     fun openPrograms() {
         val ch = channel ?: return
         if (ch.archiveDays <= 0) { noArchive(); return }
-        vm.loadTimeline(ch); scrubEpoch = null; programsIndex = 0; showMini = false; showPrograms = true
+        vm.loadTimeline(ch); scrubEpoch = null; programsIndex = 0; programsDay = 0; showMini = false; showPrograms = true
     }
     fun back() {
         when { showPrograms->showPrograms=false; scrubEpoch!=null->scrubEpoch=null; showMini->showMini=false;showTracks->{showTracks=false;runCatching{focus.requestFocus()}};showAspect->{showAspect=false;runCatching{focus.requestFocus()}}
@@ -356,8 +362,17 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
                 if(!playerFocused) return@onPreviewKeyEvent false
                 if(showPrograms) {
                     val ch=channel
-                    val rows=if(ch!=null) vm.catchupRows(ch,nowSec()) else emptyList()
+                    val all=if(ch!=null) vm.catchupRows(ch,nowSec()) else emptyList()
+                    val days=vm.catchupDays(all)
+                    val rows=vm.catchupRowsOn(all,days.getOrNull(programsDay.coerceAtMost(days.lastIndex.coerceAtLeast(0))))
                     val liveRow=if(archive!=null) 1 else 0          // in catch-up, row 0 is "back to live"
+                    // ◀ ▶ change the day: the list reads right to left, so ◀ goes back in time. The day opens on its newest show.
+                    val dayStep=when(k) { Key.DirectionLeft -> +1; Key.DirectionRight -> -1; else -> 0 }
+                    if(dayStep!=0) {
+                        val d=(programsDay+dayStep).coerceIn(0,days.lastIndex.coerceAtLeast(0))
+                        if(d!=programsDay) { programsDay=d; programsIndex=liveRow }
+                        return@onPreviewKeyEvent true
+                    }
                     when(k) {
                         Key.DirectionDown -> programsIndex=(programsIndex+1).coerceAtMost((rows.size+liveRow-1).coerceAtLeast(0))
                         Key.DirectionUp -> programsIndex=(programsIndex-1).coerceAtLeast(0)
@@ -452,6 +467,7 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
                 Box(Modifier.fillMaxWidth().height(340.dp).align(Alignment.BottomCenter).background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(.94f)))))
 
                 val isFav by vm.isFavorite(live?.channel?.id).collectAsState(initial=false)
+                val speed by vm.controller.speed.collectAsState()
                 val pillButtons = buildList {
                     if(live!=null) {
                         add(BarButton(if(isFav) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder, if(isFav) "במועדפים" else "מועדפים", tint=if(isFav) NakashColors.Live else null) { vm.toggleFavorite(live.channel) })
@@ -462,6 +478,7 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
                         add(BarButton(if(st.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, if(st.isPlaying) "השהה" else "המשך") { vm.controller.togglePlayPause() })
                         add(BarButton(Icons.Outlined.History, "תוכניות קודמות") { openPrograms() })
                     } else if(req is PlayRequest.Episode && nextEpisode!=null) add(BarButton(Icons.Filled.SkipNext, "הפרק הבא") { vm.playNext(nextEpisode!!) })
+                    if(req is PlayRequest.Movie || req is PlayRequest.Episode) add(BarButton(Icons.Outlined.Speed, "מהירות ×${tv.nakash.player.speedLabel(speed)}") { vm.controller.cycleSpeed() })
                     add(BarButton(Icons.Outlined.Subtitles, if(channel==null) "כתוביות ושמע" else "כתוביות", focus=subtitlesFocus) { showTracks=true })
                     add(BarButton(Icons.Outlined.AspectRatio, "יחס תמונה", focus=aspectFocus) { showAspect=true })
                 }
@@ -493,7 +510,11 @@ private fun PlayerScreenContent(nav:NavHostController,vm:PlayerViewModel) {
                 st.error?.let { Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) { Text(it, style = MaterialTheme.typography.headlineMedium); Text(if(archive!=null) "חזרה או ▼ לשידור החי · OK לניסיון נוסף" else "OK לניסיון נוסף · חזרה ליציאה", color = NakashColors.Muted) } }
             }
         }
-        if(showPrograms && channel!=null) CatchupPanel(channel, vm.catchupRows(channel, nowSec()), programsIndex, archive != null, nowSec())
+        if(showPrograms && channel!=null) {
+            val all = vm.catchupRows(channel, nowSec()); val days = vm.catchupDays(all)
+            val day = programsDay.coerceAtMost(days.lastIndex.coerceAtLeast(0))
+            CatchupPanel(channel, vm.catchupRowsOn(all, days.getOrNull(day)), days, day, programsIndex, archive != null, nowSec())
+        }
         if(showTracks) SubtitlePopover(vm.controller) {showTracks=false;lastKey=System.currentTimeMillis();runCatching{focus.requestFocus()}}
         if(showAspect) PlayerPopover("יחס תמונה",0,{showAspect=false;lastKey=System.currentTimeMillis();runCatching{focus.requestFocus()}}) {
             listOf(0 to "מקורי · ללא חיתוך",4 to "מילוי · עם חיתוך",3 to "מתיחה למסך").forEachIndexed {index,(mode,label) ->
@@ -689,6 +710,14 @@ private fun dayPrefix(epoch: Long) = dayLabel(epoch).let { if (it == "היום")
 
 private fun behindText(min: Long) = if (min < 60) "$min דק׳" else "${min / 60}:${"%02d".format(min % 60)} שע׳"
 
+private fun localDay(epoch: Long): java.time.LocalDate = java.time.Instant.ofEpochSecond(epoch).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+
+/** Short day name for the catch-up day tabs: "היום", "אתמול", then "יום ג׳ 10.11". */
+private fun dayTab(d: java.time.LocalDate): String {
+    val today = java.time.LocalDate.now()
+    return when (d) { today -> "היום"; today.minusDays(1) -> "אתמול"; else -> d.format(java.time.format.DateTimeFormatter.ofPattern("EEE dd.MM", java.util.Locale("he"))) }
+}
+
 private fun dayLabel(epoch: Long): String {
     val zone = java.time.ZoneId.systemDefault()
     val d = java.time.Instant.ofEpochSecond(epoch).atZone(zone).toLocalDate()
@@ -698,9 +727,11 @@ private fun dayLabel(epoch: Long): String {
 
 /** In-channel catch-up: what already aired on this channel, newest first. Hebrew list, so it reads right-to-left. */
 @Composable
-private fun androidx.compose.foundation.layout.BoxScope.CatchupPanel(ch: ChannelEntity, rows: List<EpgEntity>, index: Int, inCatchup: Boolean, now: Long) {
+private fun androidx.compose.foundation.layout.BoxScope.CatchupPanel(ch: ChannelEntity, rows: List<EpgEntity>, days: List<java.time.LocalDate>, day: Int, index: Int, inCatchup: Boolean, now: Long) {
     val list = rememberLazyListState()
-    LaunchedEffect(index) { runCatching { list.animateScrollToItem((index - 2).coerceAtLeast(0)) } }
+    LaunchedEffect(index, day) { runCatching { list.animateScrollToItem((index - 2).coerceAtLeast(0)) } }
+    val dayList = rememberLazyListState()
+    LaunchedEffect(day) { runCatching { dayList.animateScrollToItem((day - 1).coerceAtLeast(0)) } }
     val offset = if (inCatchup) 1 else 0
     androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Rtl) {
         Column(Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(660.dp)
@@ -708,19 +739,30 @@ private fun androidx.compose.foundation.layout.BoxScope.CatchupPanel(ch: Channel
             .absolutePadding(left = 90.dp, right = 56.dp, top = 56.dp, bottom = 36.dp)) {
             Text("צפייה חוזרת בערוץ", style = MaterialTheme.typography.labelLarge, color = NakashColors.Accent)
             Text(ch.displayName, style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(14.dp))
+            // Day tabs, today on the right and older days to the left (◀ ▶).
+            if (days.size > 1) {
+                androidx.compose.foundation.lazy.LazyRow(state = dayList, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    itemsIndexed(days, key = { _, d -> d.toEpochDay() }) { i, d ->
+                        val on = i == day
+                        Text(dayTab(d), Modifier.clip(RoundedCornerShape(18.dp)).background(if (on) NakashColors.Accent else Color.White.copy(alpha = .08f)).padding(horizontal = 16.dp, vertical = 7.dp),
+                            color = if (on) Color.Black else Color.White, style = MaterialTheme.typography.titleMedium.copy(fontSize = 16.sp), maxLines = 1)
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+            }
             LazyColumn(Modifier.weight(1f), state = list, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (inCatchup) item(key = "live") { CatchupRow("עכשיו", "חזרה לשידור החי", "", index == 0, NakashColors.Live) }
                 itemsIndexed(rows, key = { _, p -> p.id }) { i, p ->
                     val airing = p.end > now
                     CatchupRow("${fmtTime(p.start)}–${fmtTime(p.end)}", p.title,
-                        if (airing) "● משודר עכשיו · מההתחלה" else dayLabel(p.start),
+                        if (airing) "● משודר עכשיו · מההתחלה" else "",
                         index == i + offset, if (airing) NakashColors.Live else NakashColors.Muted)
                 }
                 if (rows.isEmpty()) item { Text("אין עדיין תוכניות בארכיון של הערוץ", color = NakashColors.Muted) }
             }
             Spacer(Modifier.height(12.dp))
-            Text("▲ ▼ בחירה · OK צפייה מההתחלה · חזרה לסגירה", color = NakashColors.Muted, style = MaterialTheme.typography.labelLarge)
+            Text(if (days.size > 1) "◀ ▶ יום · ▲ ▼ בחירה · OK צפייה · חזרה לסגירה" else "▲ ▼ בחירה · OK צפייה מההתחלה · חזרה לסגירה", color = NakashColors.Muted, style = MaterialTheme.typography.labelLarge)
         }
     }
 }
